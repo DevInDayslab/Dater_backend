@@ -1,0 +1,4 @@
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS living_in_city_mode VARCHAR(24) NOT NULL DEFAULT 'FOLLOW_DEVICE'
+        CHECK (living_in_city_mode IN ('FOLLOW_DEVICE', 'MANUAL_SWITCH'));
+
