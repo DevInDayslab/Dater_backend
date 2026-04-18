@@ -1,6 +1,10 @@
 const { query } = require("../config/db");
 const s3Media = require("./s3Media.service");
 
+const rawStoryPurgeBatch = Number(process.env.STORY_MEDIA_PURGE_BATCH);
+const STORY_MEDIA_PURGE_BATCH =
+  Number.isFinite(rawStoryPurgeBatch) && rawStoryPurgeBatch > 0 ? Math.min(rawStoryPurgeBatch, 200) : 50;
+
 /** Pending rows older than this are treated as abandoned (no /confirm after presign). */
 const rawStaleHours = Number(process.env.PHOTO_PENDING_STALE_HOURS);
 const STALE_PENDING_HOURS =
@@ -36,7 +40,79 @@ async function expireStalePendingPhotosForUser(userId) {
   return { expiredCount: res.rowCount };
 }
 
+/**
+ * Compacts active photo slots into contiguous order 1..N.
+ * Prevents hidden gaps (e.g., slots 1 and 3) from causing unintended replacements.
+ */
+async function normalizePhotoOrdersForUser(userId) {
+  // Temporary bump avoids unique collisions on (user_id, photo_order) partial index.
+  await query(
+    `UPDATE user_photos
+     SET photo_order = photo_order + 100
+     WHERE user_id = $1
+       AND deleted_at IS NULL`,
+    [userId]
+  );
+
+  await query(
+    `WITH ranked AS (
+       SELECT id,
+              ROW_NUMBER() OVER (ORDER BY photo_order ASC, uploaded_at ASC, id ASC) AS rn
+       FROM user_photos
+       WHERE user_id = $1
+         AND deleted_at IS NULL
+     )
+     UPDATE user_photos p
+     SET photo_order = r.rn,
+         is_primary = (r.rn = 1)
+     FROM ranked r
+     WHERE p.id = r.id`,
+    [userId]
+  );
+}
+
+/**
+ * Hard-delete story media in S3 after retention window (stories.media_purge_after).
+ * Keeps DB rows for audit; clears scheduled purge and media URL so clients do not load stale keys.
+ */
+async function purgeDueStoryMedia() {
+  const res = await query(
+    `SELECT id, user_id
+     FROM stories
+     WHERE deleted_at IS NOT NULL
+       AND media_purge_after IS NOT NULL
+       AND media_purge_after <= NOW()
+     ORDER BY media_purge_after ASC
+     LIMIT $1::int`,
+    [STORY_MEDIA_PURGE_BATCH]
+  );
+
+  let purgedCount = 0;
+  for (const row of res.rows) {
+    const key = s3Media.buildStoryObjectKey(row.user_id, row.id);
+    try {
+      await s3Media.deleteObjectByKey(key);
+    } catch (_) {
+      /* Leave media_purge_after set so the next poll retries (e.g. transient IAM / network). */
+      continue;
+    }
+    await query(
+      `UPDATE stories
+       SET media_purge_after = NULL,
+           media_url = ''
+       WHERE id = $1::uuid`,
+      [row.id]
+    );
+    purgedCount += 1;
+  }
+
+  return { purgedCount, scanned: res.rows.length };
+}
+
 module.exports = {
   expireStalePendingPhotosForUser,
+  normalizePhotoOrdersForUser,
+  purgeDueStoryMedia,
   STALE_PENDING_HOURS,
+  STORY_MEDIA_PURGE_BATCH,
 };

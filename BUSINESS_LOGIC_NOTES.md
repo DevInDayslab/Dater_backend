@@ -455,3 +455,14 @@ Rules:
 - Adds FK from `story_replies.chat_message_id` -> `chat_messages.id`.
 - Purpose: ensure story-reply references only point to valid chat messages.
 
+---
+
+## Flow 9: Identity verification (Face Liveness + CompareFaces)
+
+- **Migration:** `sql/018_verification.sql` — `user_verification_sessions`, `users.verified_at`, `users.verification_selfie_s3_key`, `users.verification_last_attempt_at`.
+- **API:** `POST /api/v1/users/me/verify-liveness/session`, `/preview`, `/complete` (see `users.controller.js` + `verification.service.js`).
+- **Policy:** Liveness confidence ≥ 90; `CompareFaces` similarity ≥ 90 vs each **APPROVED** profile photo; non-matching approved photos are soft-deleted + S3 removed (best effort). If **no** approved photo matches after cleanup → `account_state = HIDDEN_BY_MODERATION`, selfie still stored as anchor for recovery uploads.
+- **Success:** Selfie stored at `verifications/selfies/{userId}.webp`, `is_verified = true`, `account_state = ACTIVE`, `onboarding_completed_at` set if null; response includes refreshed `userPhotos`.
+- **Future uploads:** `photoModeration` + `photos.controller` require face match to verification selfie (or approved fallback) when user is verified, hidden-with-anchor, or selfie key exists; NSFW + weapons/violence rules unchanged/expanded.
+- **Android:** Amplify `FaceLivenessDetector` requires a valid Cognito **Identity Pool** in `app/src/main/res/raw/amplifyconfiguration.json` (unauth IAM: `rekognition:StartFaceLivenessSession`). Backend uses IAM for `CreateFaceLivenessSession` / `GetFaceLivenessSessionResults` / `CompareFaces`.
+

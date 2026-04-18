@@ -2,6 +2,20 @@ const msg91Service = require("../services/msg91.service");
 const authService = require("../services/auth.service");
 const { debugLog, maskPhoneDigits } = require("../utils/serverDebugLog");
 
+function normalizeDigits(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+/** Strict frontend parity: India mobile must be exactly 10 digits. */
+function assertValidTenDigitIndianPhone(rawPhone) {
+  const digits = normalizeDigits(rawPhone);
+  if (digits.length === 10) return digits;
+  if (digits.length === 12 && digits.startsWith("91")) return digits.slice(2);
+  const err = new Error("Phone number must be exactly 10 digits");
+  err.code = "INVALID_PHONE_NUMBER";
+  throw err;
+}
+
 function requestMeta(req) {
   return {
     ipAddress: req.ip,
@@ -13,6 +27,7 @@ function requestMeta(req) {
 async function requestOTP(req, res) {
   try {
     const { phone } = req.body;
+    assertValidTenDigitIndianPhone(phone);
     debugLog("auth_request_otp_start", { phone: maskPhoneDigits(phone) });
     const result = await msg91Service.sendOTP(phone);
     debugLog("auth_request_otp_ok", { phone: maskPhoneDigits(phone) });
@@ -38,6 +53,7 @@ async function requestOTP(req, res) {
 async function verifyOTP(req, res) {
   try {
     const { phone, otp } = req.body;
+    assertValidTenDigitIndianPhone(phone);
     debugLog("auth_verify_otp_start", { phone: maskPhoneDigits(phone) });
     const result = await msg91Service.verifyOTP(phone, otp);
 
@@ -72,6 +88,7 @@ async function verifyOTP(req, res) {
 async function resendOTP(req, res) {
   try {
     const { phone } = req.body;
+    assertValidTenDigitIndianPhone(phone);
     debugLog("auth_resend_otp_start", { phone: maskPhoneDigits(phone) });
     const result = await msg91Service.resendOTP(phone);
     debugLog("auth_resend_otp_ok", { phone: maskPhoneDigits(phone) });
@@ -184,6 +201,7 @@ async function verifyAccessToken(req, res) {
 async function createCaptchaChallenge(req, res) {
   try {
     const { phone } = req.body;
+    assertValidTenDigitIndianPhone(phone);
     debugLog("auth_captcha_challenge_start", { phone: maskPhoneDigits(phone), ...requestMeta(req) });
     const result = await authService.createCaptchaChallenge({
       phone,
@@ -214,6 +232,7 @@ async function createCaptchaChallenge(req, res) {
 async function precheckLogin(req, res) {
   try {
     const { phone } = req.body;
+    assertValidTenDigitIndianPhone(phone);
     debugLog("auth_precheck_start", { phone: maskPhoneDigits(phone), ...requestMeta(req) });
     const result = await authService.precheckLogin({
       phone,

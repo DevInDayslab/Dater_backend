@@ -54,12 +54,21 @@ function evaluateHighRiskModeration(labels) {
       haystack.includes("corpse") ||
       haystack.includes("self-injury");
 
-    if (explicitSexual || violence) {
+    const weapons =
+      haystack.includes("weapon") ||
+      haystack.includes("firearm") ||
+      haystack.includes("gun") ||
+      haystack.includes("knife") ||
+      haystack.includes("explosive") ||
+      haystack.includes("ammunition");
+
+    if (explicitSexual || violence || weapons) {
+      const rule = explicitSexual ? "explicit_or_sexual" : weapons ? "weapons" : "violence";
       hits.push({
         name: label.Name,
         parentName: label.ParentName,
         confidence: Math.round(confidence * 10) / 10,
-        rule: explicitSexual ? "explicit_or_sexual" : "violence",
+        rule,
       });
     }
   }

@@ -101,4 +101,6 @@ Quick reference for what each schema object is for, based on Flows 1-8.
 - moderation warning counters
 - `living_in_city_mode`: `FOLLOW_DEVICE` or `MANUAL_SWITCH` for current city behavior.
 - Note: overlap booleans are removed by `007_account_state_cleanup.sql`; read account state from `account_state`.
+- **Verification (018):** `verified_at`, `verification_selfie_s3_key`, `verification_last_attempt_at`.
+- **Table `user_verification_sessions`:** AWS liveness `aws_session_id`, `status`, `liveness_confidence`, `matched_count`, `removed_count`, `failure_reason`.
 

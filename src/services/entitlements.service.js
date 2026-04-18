@@ -273,35 +273,44 @@ async function purchaseComments({ userId, packSize, transactionId }) {
   return getEntitlementsSnapshot(userId);
 }
 
+/**
+ * Debit paid comments inside an existing transaction (caller owns BEGIN/COMMIT).
+ * @param {import("pg").PoolClient} client
+ */
+async function consumePaidCommentsWithClient(client, userId, useCount = 1, reason = "COMMENT_REQUEST") {
+  const count = Math.max(1, Number(useCount || 1));
+  const walletRes = await client.query(
+    `SELECT remaining_paid_comments FROM user_comment_wallet WHERE user_id = $1 FOR UPDATE`,
+    [userId]
+  );
+  const credits = Number(walletRes.rows[0]?.remaining_paid_comments || 0);
+  if (credits < count) {
+    const err = new Error("Insufficient paid comments");
+    err.code = "INSUFFICIENT_COMMENT_CREDITS";
+    throw err;
+  }
+  await client.query(
+    `UPDATE user_comment_wallet
+     SET remaining_paid_comments = remaining_paid_comments - $2,
+         updated_at = NOW()
+     WHERE user_id = $1`,
+    [userId, count]
+  );
+  await client.query(
+    `INSERT INTO user_comment_usage (user_id, used_count, reason)
+     VALUES ($1, $2, $3)`,
+    [userId, count, String(reason || "COMMENT_REQUEST").trim().toUpperCase()]
+  );
+  debugLog("entitlement_comments_consumed", { userId, usedCount: count, reason });
+}
+
 async function consumePaidComments({ userId, useCount = 1, reason = "COMMENT_REQUEST" }) {
   const count = Math.max(1, Number(useCount || 1));
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const walletRes = await client.query(
-      `SELECT remaining_paid_comments FROM user_comment_wallet WHERE user_id = $1 FOR UPDATE`,
-      [userId]
-    );
-    const credits = Number(walletRes.rows[0]?.remaining_paid_comments || 0);
-    if (credits < count) {
-      const err = new Error("Insufficient paid comments");
-      err.code = "INSUFFICIENT_COMMENT_CREDITS";
-      throw err;
-    }
-    await client.query(
-      `UPDATE user_comment_wallet
-       SET remaining_paid_comments = remaining_paid_comments - $2,
-           updated_at = NOW()
-       WHERE user_id = $1`,
-      [userId, count]
-    );
-    await client.query(
-      `INSERT INTO user_comment_usage (user_id, used_count, reason)
-       VALUES ($1, $2, $3)`,
-      [userId, count, String(reason || "COMMENT_REQUEST").trim().toUpperCase()]
-    );
+    await consumePaidCommentsWithClient(client, userId, count, reason);
     await client.query("COMMIT");
-    debugLog("entitlement_comments_consumed", { userId, usedCount: count, reason });
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;
@@ -318,6 +327,7 @@ module.exports = {
   activateBoost,
   purchaseComments,
   consumePaidComments,
+  consumePaidCommentsWithClient,
   syncPremiumState,
 };
 

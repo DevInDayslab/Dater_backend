@@ -2,6 +2,8 @@ const { query } = require("../config/db");
 const s3Media = require("../services/s3Media.service");
 const photoModeration = require("../services/photoModeration.service");
 const photoMaintenance = require("../services/photoMaintenance.service");
+const verificationService = require("../services/verification.service");
+const profileMeExtension = require("../services/profileMeExtension.service");
 const { debugLog } = require("../utils/serverDebugLog");
 
 function normalizeBlurHash(raw) {
@@ -35,6 +37,7 @@ async function presignPhotoUpload(req, res) {
   try {
     const userId = req.auth.userId;
     await photoMaintenance.expireStalePendingPhotosForUser(userId);
+    await photoMaintenance.normalizePhotoOrdersForUser(userId);
 
     const photoOrder = Number(req.body?.photoOrder);
     if (!Number.isInteger(photoOrder) || photoOrder < 1 || photoOrder > 6) {
@@ -219,12 +222,102 @@ async function confirmPhotoUpload(req, res) {
       });
     }
 
+    let faceResult;
+    try {
+      faceResult = await verificationService.assertNewPhotoMatchesVerificationAnchor(
+        userId,
+        row.s3_key,
+        row.id
+      );
+    } catch (e) {
+      debugLog("photo_face_anchor_error", { userId, photoId: row.id, error: e.message });
+      try {
+        await s3Media.deleteObjectByKey(row.s3_key);
+      } catch (_) {
+        /* best-effort */
+      }
+      await query(
+        `UPDATE user_photos
+         SET deleted_at = NOW(),
+             moderation_status = 'FAILED_MODERATION'
+         WHERE id = $1 AND user_id = $2`,
+        [photoId, userId]
+      );
+      return res.status(200).json({
+        success: true,
+        data: {
+          moderationPassed: false,
+          photoId: row.id,
+          code: e.code || "FACE_MATCH_ERROR",
+        },
+      });
+    }
+
+    if (!faceResult.skipped && !faceResult.ok) {
+      debugLog("photo_face_mismatch", {
+        userId,
+        photoId: row.id,
+        similarity: faceResult.similarity,
+      });
+      try {
+        await s3Media.deleteObjectByKey(row.s3_key);
+      } catch (_) {
+        /* best-effort */
+      }
+      await query(
+        `UPDATE user_photos
+         SET deleted_at = NOW(),
+             moderation_status = 'FAILED_MODERATION'
+         WHERE id = $1 AND user_id = $2`,
+        [photoId, userId]
+      );
+      return res.status(200).json({
+        success: true,
+        data: {
+          moderationPassed: false,
+          photoId: row.id,
+          code: "FACE_MISMATCH",
+        },
+      });
+    }
+
     await query(
       `UPDATE user_photos
        SET moderation_status = 'APPROVED'
        WHERE id = $1 AND user_id = $2`,
       [photoId, userId]
     );
+
+    const acct = await query(
+      `SELECT account_state FROM users WHERE id = $1 LIMIT 1`,
+      [userId]
+    );
+    const accountState = String(acct.rows[0]?.account_state || "ACTIVE");
+    if (accountState === "HIDDEN_BY_MODERATION") {
+      const cntRes = await query(
+        `SELECT COUNT(*)::int AS cnt
+         FROM user_photos
+         WHERE user_id = $1
+           AND deleted_at IS NULL
+           AND moderation_status = 'APPROVED'`,
+        [userId]
+      );
+      const approvedCount = cntRes.rows[0]?.cnt ?? 0;
+      if (approvedCount >= 2) {
+        await query(
+          `UPDATE users
+           SET account_state = 'ACTIVE'::account_state_enum,
+               is_verified = TRUE,
+               verified_at = COALESCE(verified_at, NOW()),
+               updated_at = NOW()
+           WHERE id = $1`,
+          [userId]
+        );
+        debugLog("photo_confirm_unhidden_after_match", { userId, approvedCount });
+      }
+    }
+
+    await profileMeExtension.recomputeAndPersistProfileCompletion(userId);
 
     debugLog("photo_moderation_approved", { userId, photoId: row.id });
 

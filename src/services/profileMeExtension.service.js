@@ -145,6 +145,7 @@ function buildProfileEditPayload(
     livingInCity: user.living_in_city || "",
     livingInCityMode: user.living_in_city_mode || "FOLLOW_DEVICE",
     homeTownCity: user.home_town_city || "",
+    preferredLocationCity: user.preferred_location_city || "",
     genderMain: user.gender_main || "",
     showGenderOnProfile: user.show_gender_on_profile !== false,
     genderMoreOptions: genderMoreRows.map((r) => r.gender_option).filter(filledStr),
@@ -163,6 +164,16 @@ function buildProfileEditPayload(
  * Loads junction tables + builds completion and profileEdit for GET /me.
  */
 async function loadProfileMeExtension(userId, userRow, approvedPhotoRows) {
+  const ufRes = await query(
+    `SELECT preferred_location_city FROM user_filters WHERE user_id = $1 LIMIT 1`,
+    [userId]
+  );
+  const prefRaw = ufRes.rows[0]?.preferred_location_city;
+  const mergedUser = {
+    ...userRow,
+    preferred_location_city: prefRaw != null && String(prefRaw).trim() ? String(prefRaw).trim() : "",
+  };
+
   const [interestsRes, lookingRes, languagesRes, pronounsRes, promptsRes, genderMoreRes, datingPrefsRes] =
     await Promise.all([
       query(
@@ -193,7 +204,7 @@ async function loadProfileMeExtension(userId, userRow, approvedPhotoRows) {
     ]);
 
   return buildProfileEditPayload(
-    userRow,
+    mergedUser,
     approvedPhotoRows,
     interestsRes.rows,
     lookingRes.rows,
@@ -252,8 +263,8 @@ async function recomputeAndPersistProfileCompletion(userId, db = null) {
     `UPDATE users
      SET profile_completion_percentage = $2
      WHERE id = $1
-       AND profile_completion_percentage IS DISTINCT FROM $2`,
-    [userId, profileCompletionPercent]
+       AND profile_completion_percentage IS DISTINCT FROM $3`,
+    [userId, profileCompletionPercent, profileCompletionPercent]
   );
 
   return profileCompletionPercent;

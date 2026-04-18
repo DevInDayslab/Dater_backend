@@ -319,11 +319,32 @@ function assertAllowedUserState(user) {
     error.code = "BANNED";
     throw error;
   }
-  if (state === "DELETED") {
-    const error = new Error("User account is deleted");
-    error.code = "DELETED";
-    throw error;
-  }
+}
+
+/**
+ * Soft-deleted accounts may log in again within the retention window and are treated as brand-new onboarding
+ * (same user row; deletion is audited separately on delete-account).
+ */
+async function normalizeDeletedUserReturning(user) {
+  if (!user || String(user.account_state) !== "DELETED") return user;
+  const res = await query(
+    `UPDATE users
+     SET account_state = 'ACTIVE'::account_state_enum,
+         deleted_at = NULL,
+         paused_until = NULL,
+         hide_my_name = FALSE,
+         onboarding_step = 'onboarding_name',
+         onboarding_completed_at = NULL,
+         onboarding_updated_at = NOW(),
+         updated_at = NOW()
+     WHERE id = $1::uuid
+       AND account_state = 'DELETED'::account_state_enum
+     RETURNING id, phone_e164, onboarding_completed_at, onboarding_step, onboarding_updated_at, account_state, underage_until`,
+    [user.id]
+  );
+  const row = res.rows[0];
+  debugLog("auth_reactivated_deleted_user", { userId: user.id });
+  return row || user;
 }
 
 async function normalizeUnderageState(user) {
@@ -383,6 +404,8 @@ async function createSessionAndToken({ userId, ipAddress, deviceId, userAgent })
     [userId, jwtId, deviceId || null, ipAddress || null, userAgent || null, ACCESS_TOKEN_TTL_SECONDS]
   );
   const session = sessionRes.rows[0];
+
+  await query(`UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE id = $1::uuid`, [userId]);
 
   const accessToken = jwt.sign(
     {
@@ -448,6 +471,7 @@ async function verifyAccessTokenAndLogin({
     });
     let user = await normalizeUnderageState(result.user);
     user = await normalizeOnboardingWindow(user);
+    user = await normalizeDeletedUserReturning(user);
     assertAllowedUserState(user);
 
     // Underage users must not be forced into PENDING_CAPTCHA (would overwrite account_state and wrong nextRoute).
@@ -542,6 +566,7 @@ async function verifyAccessTokenAndLogin({
   });
   let user = await normalizeUnderageState(result.user);
   user = await normalizeOnboardingWindow(user);
+  user = await normalizeDeletedUserReturning(user);
   const isNewUser = result.isNewUser;
   assertAllowedUserState(user);
 
@@ -647,6 +672,7 @@ async function completeCaptchaLogin({ userId, captchaChallengeId, captchaAnswer,
   let user = refreshed.rows[0];
   user = await normalizeUnderageState(user);
   user = await normalizeOnboardingWindow(user);
+  user = await normalizeDeletedUserReturning(user);
   assertAllowedUserState(user);
 
   await logAttempt({
@@ -678,6 +704,9 @@ async function logout({ userId, sessionId }) {
      RETURNING id`,
     [sessionId, userId]
   );
+  if (res.rowCount > 0) {
+    await query(`UPDATE users SET last_logout_at = NOW(), updated_at = NOW() WHERE id = $1::uuid`, [userId]);
+  }
   return { revoked: res.rowCount > 0 };
 }
 

@@ -5,7 +5,12 @@
  * photos can linger in S3 and increase storage cost.
  */
 const crypto = require("crypto");
-const { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
+const {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+} = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 const region = process.env.AWS_REGION || "ap-south-1";
@@ -20,6 +25,10 @@ function buildPublicObjectUrl(key) {
 
 function buildUserPhotoObjectKey(userId, photoId) {
   return `users/${userId}/photos/${photoId}.webp`;
+}
+
+function buildStoryObjectKey(userId, storyId) {
+  return `users/${userId}/stories/${storyId}.jpg`;
 }
 
 function newPhotoId() {
@@ -49,12 +58,50 @@ async function getPresignedGetUrl({ key, expiresInSeconds = 3600 }) {
   return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
 }
 
+/**
+ * If [mediaUrl] is our virtual-hosted public object URL for this bucket/region,
+ * return a time-limited presigned GET so clients (Coil) can read private-bucket objects.
+ * Otherwise returns [mediaUrl] unchanged (e.g. picsum, randomuser, CloudFront).
+ */
+async function presignReadIfOurS3Object(mediaUrl) {
+  const raw = String(mediaUrl || "").trim();
+  if (!raw) return raw;
+  const prefix = `https://${bucket}.s3.${region}.amazonaws.com/`;
+  if (!raw.startsWith(prefix)) return raw;
+  const encodedKey = raw.slice(prefix.length);
+  let key;
+  try {
+    key = decodeURIComponent(encodedKey.replace(/\+/g, " "));
+  } catch {
+    return raw;
+  }
+  if (!key || key.includes("..")) return raw;
+  try {
+    return await getPresignedGetUrl({ key, expiresInSeconds: 3600 });
+  } catch {
+    return raw;
+  }
+}
+
 async function deleteObjectByKey(key) {
   if (!key) return;
   await client.send(
     new DeleteObjectCommand({
       Bucket: bucket,
       Key: key,
+    })
+  );
+}
+
+/** Server-side upload (e.g. verification selfie after liveness). */
+async function putObjectBytes({ key, body, contentType = "image/webp" }) {
+  if (!key || !body) return;
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
     })
   );
 }
@@ -77,11 +124,14 @@ async function getObjectBytes(key) {
 module.exports = {
   buildPublicObjectUrl,
   buildUserPhotoObjectKey,
+  buildStoryObjectKey,
   newPhotoId,
   getPresignedPutUrl,
   getPresignedGetUrl,
+  presignReadIfOurS3Object,
   deleteObjectByKey,
   getObjectBytes,
+  putObjectBytes,
   s3Bucket: bucket,
   s3Region: region,
 };

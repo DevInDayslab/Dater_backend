@@ -7,7 +7,17 @@
     "migrate": "node src/scripts/migrate.js",
     "test:photo-flow": "node src/scripts/testPhotoUploadFlow.js",
     "benchmark:profile-photo-loads": "node src/scripts/benchmarkProfilePhotoLoads.js",
+    "seed:feed:ncr": "node src/scripts/seedDelhiNcrFeed.js",
+    "seed:feed:viewer": "node src/scripts/seedFeedProfilesForViewerPhone.js",
+    "inspect:feed:viewer": "node src/scripts/inspectFeedForViewerPhone.js",
+    "seed:notifications:viewer": "node src/scripts/seedIncomingNotificationsForViewerPhone.js",
+    "seed:friends:active:viewer": "node src/scripts/seedActiveFriendsForViewerPhone.js",
+    "seed:story:repair:viewer": "node src/scripts/seedStoryReelRepairForViewerPhone.js",
+    "seed:story:activity:demo": "node src/scripts/seedStoryActivityDemo.js",
+    "dev:clear-stories": "node src/scripts/clearAllActiveStories.js",
     "dev:reset-user": "node src/scripts/resetUserByPhone.js",
+    "dev:strip-premium-clear-views": "node src/scripts/stripPremiumAndClearProfileViewsByPhone.js",
+    "dev:grant-premium": "node src/scripts/grantPremiumDev.js",
     "start": "node src/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -27,6 +37,7 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
     "pg": "^8.20.0",
-    "sharp": "^0.33.5"
+    "sharp": "^0.33.5",
+    "socket.io": "^4.8.3"
   }
 }

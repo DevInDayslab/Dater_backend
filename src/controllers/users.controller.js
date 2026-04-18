@@ -6,6 +6,9 @@ const { resolveUserAppRoute } = require("../utils/resolveUserAppRoute");
 const profileMeExtension = require("../services/profileMeExtension.service");
 const s3Media = require("../services/s3Media.service");
 const entitlementsService = require("../services/entitlements.service");
+const verificationService = require("../services/verification.service");
+const socialService = require("../services/social.service");
+const accountLifecycle = require("../services/accountLifecycle.service");
 
 function normalizeStringArray(value) {
   if (!Array.isArray(value)) return null;
@@ -18,6 +21,11 @@ function normalizeStringArray(value) {
     out.push(v);
   }
   return out;
+}
+
+function isAlphabeticName(value) {
+  // Frontend parity with NameStep: letters + spaces only.
+  return /^[A-Za-z ]+$/.test(String(value || ""));
 }
 
 /** Blank string → null so SQL COALESCE keeps the existing column value. */
@@ -85,6 +93,189 @@ function parseWrittenPromptsPatch(value) {
   };
 }
 
+function parseBooleanPatch(value) {
+  if (value === undefined) return { present: false, value: null };
+  if (typeof value !== "boolean") return { present: true, value: null, invalid: true };
+  return { present: true, value };
+}
+
+function parseIntegerPatch(value, { min, max } = {}) {
+  if (value === undefined) return { present: false, value: null };
+  if (value === null || value === "") return { present: true, value: null };
+  const n = Number(value);
+  if (!Number.isFinite(n)) return { present: true, value: null, invalid: true };
+  const i = Math.round(n);
+  if ((min != null && i < min) || (max != null && i > max)) {
+    return { present: true, value: null, invalid: true };
+  }
+  return { present: true, value: i };
+}
+
+/** Full-body clients send these keys every time; treat as absent so we do not gate the whole PATCH. */
+function noopStringArrayPatch() {
+  return { present: false, values: null };
+}
+
+function noopBooleanPatch() {
+  return { present: false, value: null };
+}
+
+function noopIntegerPatch() {
+  return { present: false, value: null };
+}
+
+/** Matches feed / entitlements: flag or an in-window premium interval. */
+function isActivePremiumUser(row) {
+  if (!row) return false;
+  if (row.is_premium === true) return true;
+  const premiumStartMs = row.premium_started_at ? new Date(row.premium_started_at).getTime() : null;
+  const premiumExpiryMs = row.premium_expires_at ? new Date(row.premium_expires_at).getTime() : null;
+  const nowMs = Date.now();
+  return (
+    Number.isFinite(premiumStartMs) &&
+    Number.isFinite(premiumExpiryMs) &&
+    premiumStartMs <= nowMs &&
+    nowMs < premiumExpiryMs
+  );
+}
+
+const ADVANCED_FILTER_JUNCTION_TABLES = [
+  "user_filter_marital_statuses",
+  "user_filter_looking_for",
+  "user_filter_drinking_preferences",
+  "user_filter_smoking_preferences",
+  "user_filter_exercise_preferences",
+  "user_filter_religion_preferences",
+  "user_filter_education_preferences",
+  "user_filter_star_sign_preferences",
+  "user_filter_kids_preferences",
+  "user_filter_political_preferences",
+  "user_filter_pet_preferences",
+  "user_filter_ethnicity_preferences",
+  "user_filter_pronoun_preferences",
+];
+
+/** Premium-only filter rows + height / show-other scalars — safe to call repeatedly. */
+async function clearAdvancedFilterPreferencesFromDb(client, userId) {
+  for (const table of ADVANCED_FILTER_JUNCTION_TABLES) {
+    await client.query(`DELETE FROM ${table} WHERE user_id = $1`, [userId]);
+  }
+  await client.query(
+    `UPDATE user_filters
+     SET min_height_inches = NULL,
+         max_height_inches = NULL,
+         show_other_people_if_run_out = TRUE,
+         updated_at = NOW()
+     WHERE user_id = $1`,
+    [userId]
+  );
+}
+
+async function ensureUserFiltersRow(client, userId) {
+  await client.query(
+    `INSERT INTO user_filters (user_id) VALUES ($1)
+     ON CONFLICT (user_id) DO NOTHING`,
+    [userId]
+  );
+}
+
+async function loadStringRows(runQuery, sql, params, fieldName) {
+  const res = await runQuery(sql, params);
+  return res.rows.map((r) => String(r[fieldName] || "").trim()).filter(Boolean);
+}
+
+async function loadUserFiltersSnapshot(userId, runQuery = query) {
+  const scalarRes = await runQuery(
+    `SELECT uf.distance_pref_km,
+            uf.age_min,
+            uf.age_max,
+            uf.expand_age_range,
+            uf.expand_distance,
+            uf.only_verified_profiles,
+            uf.preferred_location_city,
+            uf.min_height_inches,
+            uf.max_height_inches,
+            uf.show_other_people_if_run_out,
+            u.living_in_city,
+            u.living_in_city_mode,
+            u.is_verified
+     FROM user_filters uf
+     JOIN users u ON u.id = uf.user_id
+     WHERE uf.user_id = $1
+     LIMIT 1`,
+    [userId]
+  );
+  const scalar = scalarRes.rows[0] || null;
+  if (!scalar) return null;
+
+  const [
+    preferredGenders,
+    languages,
+    maritalStatuses,
+    lookingFor,
+    drinkingPreferences,
+    smokingPreferences,
+    exercisePreferences,
+    religionPreferences,
+    educationPreferences,
+    starSignPreferences,
+    kidsPreferences,
+    politicalPreferences,
+    petPreferences,
+    ethnicityPreferences,
+    pronounPreferences,
+  ] = await Promise.all([
+    loadStringRows(runQuery, `SELECT gender FROM user_filter_preferred_genders WHERE user_id = $1 ORDER BY gender ASC`, [userId], "gender"),
+    loadStringRows(runQuery, `SELECT language FROM user_filter_languages WHERE user_id = $1 ORDER BY language ASC`, [userId], "language"),
+    loadStringRows(runQuery, `SELECT marital_status FROM user_filter_marital_statuses WHERE user_id = $1 ORDER BY marital_status ASC`, [userId], "marital_status"),
+    loadStringRows(runQuery, `SELECT looking_for_option FROM user_filter_looking_for WHERE user_id = $1 ORDER BY looking_for_option ASC`, [userId], "looking_for_option"),
+    loadStringRows(runQuery, `SELECT drinking_option FROM user_filter_drinking_preferences WHERE user_id = $1 ORDER BY drinking_option ASC`, [userId], "drinking_option"),
+    loadStringRows(runQuery, `SELECT smoking_option FROM user_filter_smoking_preferences WHERE user_id = $1 ORDER BY smoking_option ASC`, [userId], "smoking_option"),
+    loadStringRows(runQuery, `SELECT exercise_option FROM user_filter_exercise_preferences WHERE user_id = $1 ORDER BY exercise_option ASC`, [userId], "exercise_option"),
+    loadStringRows(runQuery, `SELECT religion_option FROM user_filter_religion_preferences WHERE user_id = $1 ORDER BY religion_option ASC`, [userId], "religion_option"),
+    loadStringRows(runQuery, `SELECT education_option FROM user_filter_education_preferences WHERE user_id = $1 ORDER BY education_option ASC`, [userId], "education_option"),
+    loadStringRows(runQuery, `SELECT star_sign_option FROM user_filter_star_sign_preferences WHERE user_id = $1 ORDER BY star_sign_option ASC`, [userId], "star_sign_option"),
+    loadStringRows(runQuery, `SELECT kids_option FROM user_filter_kids_preferences WHERE user_id = $1 ORDER BY kids_option ASC`, [userId], "kids_option"),
+    loadStringRows(runQuery, `SELECT political_option FROM user_filter_political_preferences WHERE user_id = $1 ORDER BY political_option ASC`, [userId], "political_option"),
+    loadStringRows(runQuery, `SELECT pet_option FROM user_filter_pet_preferences WHERE user_id = $1 ORDER BY pet_option ASC`, [userId], "pet_option"),
+    loadStringRows(runQuery, `SELECT ethnicity_option FROM user_filter_ethnicity_preferences WHERE user_id = $1 ORDER BY ethnicity_option ASC`, [userId], "ethnicity_option"),
+    loadStringRows(runQuery, `SELECT pronoun_option FROM user_filter_pronoun_preferences WHERE user_id = $1 ORDER BY pronoun_option ASC`, [userId], "pronoun_option"),
+  ]);
+
+  const usingSwitchCity = String(scalar.living_in_city_mode || "FOLLOW_DEVICE") === "MANUAL_SWITCH";
+  return {
+    preferredGenders,
+    distanceKm: Number(scalar.distance_pref_km || 20),
+    ageMin: Number(scalar.age_min || 20),
+    ageMax: Number(scalar.age_max || 36),
+    expandAgeRange: Boolean(scalar.expand_age_range),
+    expandDistance: Boolean(scalar.expand_distance),
+    onlyVerifiedProfiles: Boolean(scalar.only_verified_profiles),
+    selectedLocation: usingSwitchCity
+      ? String(scalar.living_in_city || scalar.preferred_location_city || "").trim()
+      : "__CURRENT_LOCATION__",
+    usingSwitchCity,
+    minHeightInches: scalar.min_height_inches == null ? null : Number(scalar.min_height_inches),
+    maxHeightInches: scalar.max_height_inches == null ? null : Number(scalar.max_height_inches),
+    showOtherPeopleIfRunOut: Boolean(scalar.show_other_people_if_run_out),
+    languages,
+    maritalStatuses,
+    lookingFor,
+    drinkingPreferences,
+    smokingPreferences,
+    exercisePreferences,
+    religionPreferences,
+    educationPreferences,
+    starSignPreferences,
+    kidsPreferences,
+    politicalPreferences,
+    petPreferences,
+    ethnicityPreferences,
+    pronounPreferences,
+    viewerIsVerified: Boolean(scalar.is_verified),
+  };
+}
+
 async function replaceUserRows(client, { table, column, userId, values }) {
   await client.query(`DELETE FROM ${table} WHERE user_id = $1`, [userId]);
   for (const value of values) {
@@ -113,13 +304,17 @@ async function replaceUserWrittenPrompts(client, { userId, prompts }) {
 async function getMe(req, res) {
   try {
     const userId = req.auth.userId;
+    await accountLifecycle.normalizeExpiredPauseForUser(userId);
     const entitlementSnapshot = await entitlementsService.getEntitlementsSnapshot(userId);
     const result = await query(
       `SELECT id, phone_e164, account_state, onboarding_step, onboarding_completed_at, onboarding_updated_at,
+              moderation_warning_count, moderation_warnings_acknowledged,
               location_granted, living_in_city, home_town_city, notifications_granted,
               is_verified, is_premium, is_phone_verified,
               premium_started_at, premium_expires_at, premium_plan_code, premium_status,
               created_at, new_here_until,
+              paused_until, hide_my_name,
+              verified_at, verification_last_attempt_at, verification_selfie_s3_key,
               name, age_years, date_of_birth, gender, gender_main, show_gender_on_profile, marital_status,
               bio, preset_message, height_inches, drinking, smoking, exercise, religion, education,
               star_sign, kids, political_leanings, pets,
@@ -134,6 +329,13 @@ async function getMe(req, res) {
     );
 
     const user = result.rows[0];
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
     if (!user.is_premium && user.living_in_city_mode === "MANUAL_SWITCH") {
       const lat = Number(user.location_latitude);
       const lng = Number(user.location_longitude);
@@ -161,14 +363,8 @@ async function getMe(req, res) {
       });
     }
 
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
     await photoMaintenance.expireStalePendingPhotosForUser(userId);
+    await photoMaintenance.normalizePhotoOrdersForUser(userId);
 
     const photosRes = await query(
       `SELECT id, photo_url, photo_order, is_primary, moderation_status, blur_hash, s3_key
@@ -200,8 +396,8 @@ async function getMe(req, res) {
       `UPDATE users
        SET profile_completion_percentage = $2
        WHERE id = $1
-         AND profile_completion_percentage IS DISTINCT FROM $2`,
-      [userId, profileCompletionPercent]
+         AND profile_completion_percentage IS DISTINCT FROM $3`,
+      [userId, profileCompletionPercent, profileCompletionPercent]
     );
 
     const nextRoute = resolveUserAppRoute(user);
@@ -217,6 +413,16 @@ async function getMe(req, res) {
       ? new Date(effectiveNewHereUntilMs).toISOString()
       : null;
 
+    const pendingSess = await query(
+      `SELECT EXISTS (
+         SELECT 1 FROM user_verification_sessions
+         WHERE user_id = $1 AND status = 'CREATED' AND created_at > NOW() - INTERVAL '30 minutes'
+       ) AS pending`,
+      [userId]
+    );
+    const verificationPending = Boolean(pendingSess.rows[0]?.pending);
+    const filters = await loadUserFiltersSnapshot(userId);
+
     return res.status(200).json({
       success: true,
       message: "User profile fetched",
@@ -224,11 +430,15 @@ async function getMe(req, res) {
         userId: user.id,
         phoneE164: user.phone_e164,
         accountState: user.account_state,
+        moderationWarningCount: Number(user.moderation_warning_count || 0),
+        moderationWarningsAcknowledged: Number(user.moderation_warnings_acknowledged || 0),
         onboardingStep: user.onboarding_step,
         onboardingCompletedAt: user.onboarding_completed_at,
         isVerified: user.is_verified,
         isPremium: user.is_premium,
         isPhoneVerified: user.is_phone_verified,
+        hideMyName: user.hide_my_name === true,
+        pausedUntil: user.paused_until ? new Date(user.paused_until).toISOString() : null,
         locationGranted: user.location_granted,
         livingInCity: user.living_in_city,
         livingInCityMode: user.living_in_city_mode || "FOLLOW_DEVICE",
@@ -258,6 +468,13 @@ async function getMe(req, res) {
           moderationStatus: p.moderation_status,
           blurHash: p.blur_hash || null,
         })),
+        verification: {
+          verificationPending,
+          verifiedAt: user.verified_at || null,
+          verificationLastAttemptAt: user.verification_last_attempt_at || null,
+          hasVerificationSelfie: Boolean(user.verification_selfie_s3_key),
+        },
+        filters,
       },
     });
   } catch (error) {
@@ -265,6 +482,569 @@ async function getMe(req, res) {
       success: false,
       message: "Failed to fetch user profile",
       error: error.message,
+    });
+  }
+}
+
+async function ackModerationWarning(req, res) {
+  try {
+    const userId = req.auth.userId;
+    await query(
+      `UPDATE users
+       SET moderation_warnings_acknowledged = moderation_warning_count
+       WHERE id = $1::uuid`,
+      [userId]
+    );
+    return res.status(200).json({ success: true, message: "OK" });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to acknowledge moderation warning",
+    });
+  }
+}
+
+async function getMyFilters(req, res) {
+  try {
+    const userId = req.auth.userId;
+    const userRowRes = await query(
+      `SELECT id, is_premium, premium_started_at, premium_expires_at
+       FROM users
+       WHERE id = $1 AND deleted_at IS NULL
+       LIMIT 1`,
+      [userId]
+    );
+    if (!userRowRes.rows[0]) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+    if (!isActivePremiumUser(userRowRes.rows[0])) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await ensureUserFiltersRow(client, userId);
+        await clearAdvancedFilterPreferencesFromDb(client, userId);
+        await client.query("COMMIT");
+      } catch (e) {
+        await client.query("ROLLBACK");
+        throw e;
+      } finally {
+        client.release();
+      }
+    }
+    const filters = await loadUserFiltersSnapshot(userId);
+    if (!filters) {
+      return res.status(404).json({
+        success: false,
+        message: "Filter preferences not found",
+      });
+    }
+    return res.status(200).json({
+      success: true,
+      message: "Filter preferences fetched",
+      data: filters,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch filter preferences",
+      error: error.message,
+    });
+  }
+}
+
+async function updateMyFilters(req, res) {
+  const userId = req.auth.userId;
+  const body = req.body || {};
+  const preferredGendersPatch = parseStringArrayPatch(body.preferredGenders);
+  const languagesPatch = parseStringArrayPatch(body.languages);
+  let maritalStatusesPatch = parseStringArrayPatch(body.maritalStatuses);
+  let lookingForPatch = parseStringArrayPatch(body.lookingFor);
+  let drinkingPatch = parseStringArrayPatch(body.drinkingPreferences);
+  let smokingPatch = parseStringArrayPatch(body.smokingPreferences);
+  let exercisePatch = parseStringArrayPatch(body.exercisePreferences);
+  let religionPatch = parseStringArrayPatch(body.religionPreferences);
+  let educationPatch = parseStringArrayPatch(body.educationPreferences);
+  let starSignPatch = parseStringArrayPatch(body.starSignPreferences);
+  let kidsPatch = parseStringArrayPatch(body.kidsPreferences);
+  let politicalPatch = parseStringArrayPatch(body.politicalPreferences);
+  let petPatch = parseStringArrayPatch(body.petPreferences);
+  let ethnicityPatch = parseStringArrayPatch(body.ethnicityPreferences);
+  let pronounPatch = parseStringArrayPatch(body.pronounPreferences);
+  const expandAgeRangePatch = parseBooleanPatch(body.expandAgeRange);
+  const expandDistancePatch = parseBooleanPatch(body.expandDistance);
+  const onlyVerifiedPatch = parseBooleanPatch(body.onlyVerifiedProfiles);
+  let showOtherPeoplePatch = parseBooleanPatch(body.showOtherPeopleIfRunOut);
+  const distancePatch = parseIntegerPatch(body.distanceKm, { min: 2, max: 150 });
+  const ageMinPatch = parseIntegerPatch(body.ageMin, { min: 18, max: 80 });
+  const ageMaxPatch = parseIntegerPatch(body.ageMax, { min: 18, max: 80 });
+  let minHeightPatch = parseIntegerPatch(body.minHeightInches, { min: 36, max: 96 });
+  let maxHeightPatch = parseIntegerPatch(body.maxHeightInches, { min: 36, max: 96 });
+
+  const invalidPatch = [
+    preferredGendersPatch,
+    languagesPatch,
+    maritalStatusesPatch,
+    lookingForPatch,
+    drinkingPatch,
+    smokingPatch,
+    exercisePatch,
+    religionPatch,
+    educationPatch,
+    starSignPatch,
+    kidsPatch,
+    politicalPatch,
+    petPatch,
+    ethnicityPatch,
+    pronounPatch,
+    expandAgeRangePatch,
+    expandDistancePatch,
+    onlyVerifiedPatch,
+    showOtherPeoplePatch,
+    distancePatch,
+    ageMinPatch,
+    ageMaxPatch,
+    minHeightPatch,
+    maxHeightPatch,
+  ].some((p) => p.invalid === true);
+  if (invalidPatch) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid filter payload",
+    });
+  }
+
+  if (ageMinPatch.present && ageMaxPatch.present && ageMinPatch.value != null && ageMaxPatch.value != null) {
+    if (ageMaxPatch.value < ageMinPatch.value) {
+      return res.status(400).json({
+        success: false,
+        message: "ageMax must be greater than or equal to ageMin",
+      });
+    }
+  }
+  if (minHeightPatch.present && maxHeightPatch.present && minHeightPatch.value != null && maxHeightPatch.value != null) {
+    if (maxHeightPatch.value < minHeightPatch.value) {
+      return res.status(400).json({
+        success: false,
+        message: "maxHeightInches must be greater than or equal to minHeightInches",
+      });
+    }
+  }
+
+  const currentUserRes = await query(
+    `SELECT is_verified, is_premium, premium_started_at, premium_expires_at
+     FROM users
+     WHERE id = $1
+     LIMIT 1`,
+    [userId]
+  );
+  const currentUser = currentUserRes.rows[0];
+  if (!currentUser) {
+    return res.status(404).json({ success: false, message: "User not found" });
+  }
+
+  if (onlyVerifiedPatch.present && onlyVerifiedPatch.value === true && currentUser.is_verified !== true) {
+    return res.status(403).json({
+      success: false,
+      code: "VERIFY_REQUIRED",
+      message: "Verify yourself first to use this filter",
+    });
+  }
+
+  const isPremiumUser = isActivePremiumUser(currentUser);
+
+  const selectedLocationRaw = hasOwn(body, "selectedLocation")
+    ? String(body.selectedLocation || "").trim()
+    : null;
+  const selectedLocationPresent = hasOwn(body, "selectedLocation");
+  const useCurrentLocation = selectedLocationPresent && selectedLocationRaw === "__CURRENT_LOCATION__";
+  const wantsSwitchCity = selectedLocationPresent && selectedLocationRaw && !useCurrentLocation;
+  if (wantsSwitchCity && !isPremiumUser) {
+    return res.status(403).json({
+      success: false,
+      code: "PREMIUM_REQUIRED",
+      message: "Switch city requires an active premium window",
+    });
+  }
+
+  /**
+   * Mobile sends a full filter body every time, so array keys are always "present".
+   * Non-premium users may still PATCH basics + languages; ignore premium-only advanced mutations here
+   * (advanced changes are gated in-app + switch-city still returns PREMIUM_REQUIRED above).
+   */
+  if (!isPremiumUser) {
+    maritalStatusesPatch = noopStringArrayPatch();
+    lookingForPatch = noopStringArrayPatch();
+    drinkingPatch = noopStringArrayPatch();
+    smokingPatch = noopStringArrayPatch();
+    exercisePatch = noopStringArrayPatch();
+    religionPatch = noopStringArrayPatch();
+    educationPatch = noopStringArrayPatch();
+    starSignPatch = noopStringArrayPatch();
+    kidsPatch = noopStringArrayPatch();
+    politicalPatch = noopStringArrayPatch();
+    petPatch = noopStringArrayPatch();
+    ethnicityPatch = noopStringArrayPatch();
+    pronounPatch = noopStringArrayPatch();
+    minHeightPatch = noopIntegerPatch();
+    maxHeightPatch = noopIntegerPatch();
+    showOtherPeoplePatch = noopBooleanPatch();
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await ensureUserFiltersRow(client, userId);
+    if (!isPremiumUser) {
+      await clearAdvancedFilterPreferencesFromDb(client, userId);
+    }
+
+    const scalarSet = [];
+    const scalarValues = [userId];
+    const addScalarSet = (column, value) => {
+      scalarValues.push(value);
+      scalarSet.push(`${column} = $${scalarValues.length}`);
+    };
+
+    if (distancePatch.present) addScalarSet("distance_pref_km", distancePatch.value);
+    if (ageMinPatch.present) addScalarSet("age_min", ageMinPatch.value);
+    if (ageMaxPatch.present) addScalarSet("age_max", ageMaxPatch.value);
+    if (expandAgeRangePatch.present) addScalarSet("expand_age_range", expandAgeRangePatch.value);
+    if (expandDistancePatch.present) addScalarSet("expand_distance", expandDistancePatch.value);
+    if (onlyVerifiedPatch.present) addScalarSet("only_verified_profiles", onlyVerifiedPatch.value);
+    if (selectedLocationPresent) {
+      addScalarSet("preferred_location_city", useCurrentLocation ? null : selectedLocationRaw || null);
+    }
+    if (minHeightPatch.present) addScalarSet("min_height_inches", minHeightPatch.value);
+    if (maxHeightPatch.present) addScalarSet("max_height_inches", maxHeightPatch.value);
+    if (showOtherPeoplePatch.present) addScalarSet("show_other_people_if_run_out", showOtherPeoplePatch.value);
+
+    if (scalarSet.length > 0) {
+      scalarSet.push("updated_at = NOW()");
+      await client.query(
+        `UPDATE user_filters
+         SET ${scalarSet.join(",\n             ")}
+         WHERE user_id = $1`,
+        scalarValues
+      );
+    }
+
+    if (selectedLocationPresent) {
+      if (useCurrentLocation) {
+        await client.query(
+          `UPDATE users
+           SET living_in_city_mode = 'FOLLOW_DEVICE',
+               updated_at = NOW()
+           WHERE id = $1`,
+          [userId]
+        );
+      } else {
+        await client.query(
+          `UPDATE users
+           SET living_in_city = $2,
+               living_in_city_mode = 'MANUAL_SWITCH',
+               updated_at = NOW()
+           WHERE id = $1`,
+          [userId, selectedLocationRaw]
+        );
+      }
+    }
+
+    const rowReplacements = [
+      [preferredGendersPatch, "user_filter_preferred_genders", "gender"],
+      [languagesPatch, "user_filter_languages", "language"],
+      [maritalStatusesPatch, "user_filter_marital_statuses", "marital_status"],
+      [lookingForPatch, "user_filter_looking_for", "looking_for_option"],
+      [drinkingPatch, "user_filter_drinking_preferences", "drinking_option"],
+      [smokingPatch, "user_filter_smoking_preferences", "smoking_option"],
+      [exercisePatch, "user_filter_exercise_preferences", "exercise_option"],
+      [religionPatch, "user_filter_religion_preferences", "religion_option"],
+      [educationPatch, "user_filter_education_preferences", "education_option"],
+      [starSignPatch, "user_filter_star_sign_preferences", "star_sign_option"],
+      [kidsPatch, "user_filter_kids_preferences", "kids_option"],
+      [politicalPatch, "user_filter_political_preferences", "political_option"],
+      [petPatch, "user_filter_pet_preferences", "pet_option"],
+      [ethnicityPatch, "user_filter_ethnicity_preferences", "ethnicity_option"],
+      [pronounPatch, "user_filter_pronoun_preferences", "pronoun_option"],
+    ];
+    for (const [patch, table, column] of rowReplacements) {
+      if (patch.present) {
+        await replaceUserRows(client, { table, column, userId, values: patch.values });
+      }
+    }
+
+    await client.query("COMMIT");
+    const filters = await loadUserFiltersSnapshot(userId);
+    debugLog("filters_saved", {
+      userId,
+      touchedFields: Object.keys(body),
+      usingSwitchCity: filters?.usingSwitchCity || false,
+      onlyVerifiedProfiles: filters?.onlyVerifiedProfiles || false,
+    });
+    return res.status(200).json({
+      success: true,
+      message: "Filter preferences updated",
+      data: filters,
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update filter preferences",
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+}
+
+async function getPublicProfile(req, res) {
+  try {
+    const viewerId = req.auth.userId;
+    const targetUserId = req.params.userId;
+    const recordViewRaw = String(req.query?.recordView ?? "").toLowerCase().trim();
+    const consumeView = recordViewRaw !== "false" && recordViewRaw !== "0";
+    const profile = await socialService.getPublicProfile(viewerId, targetUserId, {
+      source: "FEED",
+      consumeView,
+    });
+    return res.status(200).json({
+      success: true,
+      message: "Profile fetched",
+      data: profile,
+    });
+  } catch (error) {
+    const status =
+      error.code === "PROFILE_VIEW_LIMIT_REACHED"
+        ? 403
+        : error.code === "PROFILE_NOT_FOUND" || error.code === "VIEWER_NOT_FOUND"
+          ? 404
+          : error.code === "INVALID_TARGET_USER"
+            ? 400
+            : 500;
+    const body = {
+      success: false,
+      code: error.code || "PROFILE_FETCH_FAILED",
+      message: error.message || "Failed to fetch profile",
+    };
+    if (error.code === "PROFILE_VIEW_LIMIT_REACHED" && error.profileViewsUnlockAt) {
+      body.data = { profileViewsUnlockAt: error.profileViewsUnlockAt };
+    }
+    return res.status(status).json(body);
+  }
+}
+
+async function sendFriendRequest(req, res) {
+  try {
+    const viewerId = req.auth.userId;
+    const { targetUserId } = req.body || {};
+    const profile = await socialService.sendFriendRequest(viewerId, targetUserId);
+    return res.status(200).json({
+      success: true,
+      message: "Friend request sent",
+      data: profile,
+    });
+  } catch (error) {
+    const status =
+      error.code === "PROFILE_NOT_FOUND"
+        ? 404
+        : error.code === "PRIVACY_MODE_BLOCKS_REQUEST"
+          ? 403
+          : error.code === "INVALID_TARGET_USER" || error.code === "ALREADY_FRIENDS"
+            ? 400
+            : 500;
+    return res.status(status).json({
+      success: false,
+      code: error.code || "REQUEST_SEND_FAILED",
+      message: error.message || "Failed to send friend request",
+    });
+  }
+}
+
+async function sendCommentRequest(req, res) {
+  try {
+    const viewerId = req.auth.userId;
+    const { targetUserId, message } = req.body || {};
+    const profile = await socialService.sendCommentRequest(viewerId, targetUserId, message);
+    return res.status(200).json({
+      success: true,
+      message: "Comment request sent",
+      data: profile,
+    });
+  } catch (error) {
+    const status =
+      error.code === "PROFILE_NOT_FOUND"
+        ? 404
+        : error.code === "PRIVACY_MODE_BLOCKS_REQUEST"
+          ? 403
+          : error.code === "INSUFFICIENT_COMMENT_CREDITS"
+            ? 409
+            : error.code === "INVALID_TARGET_USER" ||
+                error.code === "ALREADY_FRIENDS" ||
+                error.code === "INVALID_COMMENT_TEXT"
+              ? 400
+              : 500;
+    return res.status(status).json({
+      success: false,
+      code: error.code || "COMMENT_REQUEST_SEND_FAILED",
+      message: error.message || "Failed to send comment request",
+    });
+  }
+}
+
+async function ignoreProfile(req, res) {
+  try {
+    const viewerId = req.auth.userId;
+    const { targetUserId } = req.body || {};
+    await socialService.ignoreProfile(viewerId, targetUserId);
+    return res.status(200).json({
+      success: true,
+      message: "Profile ignored",
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      code: error.code || "PROFILE_IGNORE_FAILED",
+      message: error.message || "Failed to ignore profile",
+    });
+  }
+}
+
+async function listIncomingFriendRequests(req, res) {
+  try {
+    const viewerId = req.auth.userId;
+    const result = await socialService.listIncomingFriendRequests(viewerId, {
+      page: req.query.page,
+      pageSize: req.query.pageSize,
+    });
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      code: error.code || "NOTIFICATIONS_LIST_FAILED",
+      message: error.message || "Failed to load friend requests",
+    });
+  }
+}
+
+async function listFriends(req, res) {
+  try {
+    const viewerId = req.auth.userId;
+    const items = await socialService.listFriends(viewerId, {
+      sort: req.query.sort,
+    });
+    return res.status(200).json({
+      success: true,
+      data: { items },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      code: error.code || "FRIENDS_LIST_FAILED",
+      message: error.message || "Failed to load friends",
+    });
+  }
+}
+
+async function undoIncomingFriendRequestIgnore(req, res) {
+  try {
+    const viewerId = req.auth.userId;
+    const fromUserId = req.params.fromUserId;
+    await socialService.undoIncomingFriendRequestIgnore(viewerId, fromUserId);
+    return res.status(200).json({
+      success: true,
+      message: "Request restored",
+    });
+  } catch (error) {
+    const status = error.code === "REQUEST_UNDO_NOT_FOUND" ? 404 : 500;
+    return res.status(status).json({
+      success: false,
+      code: error.code || "REQUEST_UNDO_FAILED",
+      message: error.message || "Failed to undo ignore",
+    });
+  }
+}
+
+async function respondToRequest(req, res) {
+  try {
+    const viewerId = req.auth.userId;
+    const fromUserId = req.params.fromUserId;
+    const { decision } = req.body || {};
+    const profile = await socialService.respondToRequest(viewerId, fromUserId, decision);
+    return res.status(200).json({
+      success: true,
+      message: "Request updated",
+      data: profile,
+    });
+  } catch (error) {
+    const status =
+      error.code === "REQUEST_NOT_FOUND"
+        ? 404
+        : error.code === "INVALID_REQUEST_DECISION"
+          ? 400
+          : 500;
+    return res.status(status).json({
+      success: false,
+      code: error.code || "REQUEST_RESPONSE_FAILED",
+      message: error.message || "Failed to update request",
+    });
+  }
+}
+
+async function unfriendUser(req, res) {
+  try {
+    const viewerId = req.auth.userId;
+    const targetUserId = req.params.userId;
+    await socialService.unfriendUser(viewerId, targetUserId);
+    return res.status(200).json({ success: true, message: "Unfriended" });
+  } catch (error) {
+    const status = error.code === "INVALID_TARGET_USER" ? 400 : 500;
+    return res.status(status).json({
+      success: false,
+      code: error.code || "UNFRIEND_FAILED",
+      message: error.message || "Failed to unfriend",
+    });
+  }
+}
+
+async function blockUser(req, res) {
+  try {
+    const viewerId = req.auth.userId;
+    const targetUserId = req.params.userId;
+    const reason = req.body?.reason || "";
+    await socialService.blockUser(viewerId, targetUserId, reason);
+    return res.status(200).json({ success: true, message: "Blocked" });
+  } catch (error) {
+    const status = error.code === "INVALID_TARGET_USER" ? 400 : 500;
+    return res.status(status).json({
+      success: false,
+      code: error.code || "BLOCK_FAILED",
+      message: error.message || "Failed to block user",
+    });
+  }
+}
+
+async function reportUser(req, res) {
+  try {
+    const viewerId = req.auth.userId;
+    const targetUserId = req.params.userId;
+    const reason = req.body?.reason || "";
+    const contentType = req.body?.contentType || "PROFILE";
+    const threadId = req.body?.threadId || "";
+    const data = await socialService.reportUser(viewerId, targetUserId, { reason, contentType, threadId });
+    return res.status(200).json({ success: true, message: "Reported", data });
+  } catch (error) {
+    const status =
+      error.code === "INVALID_TARGET_USER" || error.code === "REPORT_REASON_REQUIRED" ? 400 : 500;
+    return res.status(status).json({
+      success: false,
+      code: error.code || "REPORT_FAILED",
+      message: error.message || "Failed to report user",
     });
   }
 }
@@ -325,6 +1105,23 @@ async function updateProfileCore(req, res) {
       suppressLivingInAutofill,
       livingInCityMode,
     } = body;
+    if (hasOwn(body, "name")) {
+      const rawName = String(body.name || "").trim();
+      if (!rawName) {
+        return res.status(400).json({
+          success: false,
+          code: "INVALID_NAME",
+          message: "Name is required",
+        });
+      }
+      if (!isAlphabeticName(rawName)) {
+        return res.status(400).json({
+          success: false,
+          code: "INVALID_NAME",
+          message: "Name can contain only alphabets and spaces",
+        });
+      }
+    }
     const hasCoordinates =
       Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude));
     const currentUserRes = await query(
@@ -783,11 +1580,356 @@ async function listIndianCities(req, res) {
   }
 }
 
+async function createVerifyLivenessSession(req, res) {
+  try {
+    const userId = req.auth.userId;
+    const { sessionId, region } = await verificationService.createLivenessSessionForUser(userId);
+    return res.status(200).json({
+      success: true,
+      message: "Face liveness session created",
+      data: { sessionId, region },
+    });
+  } catch (error) {
+    debugLog("verify_liveness_session_error", { error: error.message, code: error.code });
+    return res.status(502).json({
+      success: false,
+      code: error.code || "AWS_TEMPORARY_ERROR",
+      message: error.message || "Could not create liveness session",
+    });
+  }
+}
+
+async function previewVerifyLiveness(req, res) {
+  try {
+    const userId = req.auth.userId;
+    const sessionId = String(req.body?.sessionId || "").trim();
+    if (!sessionId) {
+      return res.status(400).json({ success: false, message: "sessionId is required" });
+    }
+    const preview = await verificationService.getLivenessPreviewForUser(userId, sessionId);
+    return res.status(200).json({
+      success: true,
+      message: "Liveness preview",
+      data: preview,
+    });
+  } catch (error) {
+    const code = error.code || "LIVENESS_FAILED";
+    const status = code === "SESSION_NOT_FOUND" ? 404 : 400;
+    debugLog("verify_liveness_preview_error", { error: error.message, code });
+    return res.status(status).json({
+      success: false,
+      code,
+      message: error.message || "Liveness preview failed",
+      details: error.details || undefined,
+    });
+  }
+}
+
+async function completeVerifyLiveness(req, res) {
+  try {
+    const userId = req.auth.userId;
+    const sessionId = String(req.body?.sessionId || "").trim();
+    if (!sessionId) {
+      return res.status(400).json({ success: false, message: "sessionId is required" });
+    }
+    const outcome = await verificationService.completeLivenessVerification(userId, sessionId);
+    if (!outcome.ok) {
+      await profileMeExtension.recomputeAndPersistProfileCompletion(userId);
+      return res.status(200).json({
+        success: false,
+        code: outcome.code,
+        message: outcome.message,
+        data: {
+          accountState: outcome.accountState,
+          isVerified: outcome.isVerified,
+          userPhotos: outcome.userPhotos,
+          matchedCount: outcome.matchedCount,
+          removedCount: outcome.removedCount,
+        },
+      });
+    }
+
+    const profileCompletionPercent = await profileMeExtension.recomputeAndPersistProfileCompletion(userId);
+
+    return res.status(200).json({
+      success: true,
+      message: "Verification complete",
+      data: {
+        accountState: outcome.accountState,
+        isVerified: outcome.isVerified,
+        userPhotos: outcome.userPhotos,
+        matchedCount: outcome.matchedCount,
+        removedCount: outcome.removedCount,
+        profileCompletionPercent: Math.round(Number(profileCompletionPercent ?? 0)),
+      },
+    });
+  } catch (error) {
+    const code = error.code || "VERIFICATION_ERROR";
+    debugLog("verify_liveness_complete_error", { error: error.message, code });
+    const status =
+      code === "SESSION_NOT_FOUND"
+        ? 404
+        : code === "NO_APPROVED_PHOTOS" || code === "LIVENESS_FAILED"
+          ? 400
+          : 502;
+    return res.status(status).json({
+      success: false,
+      code,
+      message: error.message || "Verification failed",
+    });
+  }
+}
+
+/**
+ * Account privacy: hide-my-name, premium-gated privacy mode, pause (timed or manual), distinct from moderation hidden.
+ */
+async function patchAccountSettings(req, res) {
+  try {
+    const userId = req.auth.userId;
+    const body = req.body || {};
+    const hasHide = Object.prototype.hasOwnProperty.call(body, "hideMyName");
+    const hasPrivacy = Object.prototype.hasOwnProperty.call(body, "privacyMode");
+    const hasPause = Object.prototype.hasOwnProperty.call(body, "pauseAccount");
+    const pauseDuration = body.pauseDuration != null ? String(body.pauseDuration).trim() : "";
+    const pausedUntilIso =
+      body.pausedUntil != null && String(body.pausedUntil).trim() !== ""
+        ? String(body.pausedUntil).trim()
+        : null;
+
+    if (!hasHide && !hasPrivacy && !hasPause) {
+      return res.status(400).json({
+        success: false,
+        code: "EMPTY_PATCH",
+        message: "No account settings supplied",
+      });
+    }
+
+    const rowRes = await query(
+      `SELECT id, account_state, is_premium, premium_started_at, premium_expires_at, paused_until
+       FROM users
+       WHERE id = $1::uuid AND deleted_at IS NULL
+       LIMIT 1`,
+      [userId]
+    );
+    const row = rowRes.rows[0];
+    if (!row) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    let hideMyName = null;
+    if (hasHide) {
+      if (typeof body.hideMyName !== "boolean") {
+        return res.status(400).json({ success: false, message: "hideMyName must be a boolean" });
+      }
+      hideMyName = body.hideMyName;
+    }
+
+    let nextState = String(row.account_state || "ACTIVE");
+    let pausedUntil = row.paused_until;
+
+    if (hasPause) {
+      if (typeof body.pauseAccount !== "boolean") {
+        return res.status(400).json({ success: false, message: "pauseAccount must be a boolean" });
+      }
+      if (body.pauseAccount === true) {
+        if (nextState === "HIDDEN_BY_MODERATION" || nextState === "BANNED" || nextState === "DELETED") {
+          return res.status(409).json({
+            success: false,
+            code: "ACCOUNT_STATE_LOCKED",
+            message: "Account cannot be paused in the current state",
+          });
+        }
+        nextState = "PAUSED";
+        if (pausedUntilIso) {
+          const t = new Date(pausedUntilIso);
+          if (Number.isNaN(t.getTime())) {
+            return res.status(400).json({ success: false, message: "pausedUntil must be a valid ISO timestamp" });
+          }
+          pausedUntil = t.toISOString();
+        } else if (pauseDuration) {
+          const mapped = accountLifecycle.pauseDurationToUntilIso(pauseDuration);
+          if (mapped.error) {
+            return res.status(400).json({ success: false, code: mapped.error, message: "Invalid pause duration" });
+          }
+          pausedUntil = mapped.pausedUntilIso;
+        } else {
+          pausedUntil = null;
+        }
+      } else {
+        if (nextState === "PAUSED") {
+          nextState = "ACTIVE";
+        }
+        pausedUntil = null;
+      }
+    }
+
+    if (hasPrivacy) {
+      if (typeof body.privacyMode !== "boolean") {
+        return res.status(400).json({ success: false, message: "privacyMode must be a boolean" });
+      }
+      if (body.privacyMode === true) {
+        if (!isActivePremiumUser(row)) {
+          return res.status(402).json({
+            success: false,
+            code: "PREMIUM_REQUIRED",
+            message: "Privacy mode is a Premium feature",
+          });
+        }
+        if (nextState === "HIDDEN_BY_MODERATION" || nextState === "BANNED" || nextState === "DELETED") {
+          return res.status(409).json({
+            success: false,
+            code: "ACCOUNT_STATE_LOCKED",
+            message: "Privacy mode is not available in the current account state",
+          });
+        }
+        nextState = "PRIVACY_MODE";
+        pausedUntil = null;
+      } else if (body.privacyMode === false && nextState === "PRIVACY_MODE") {
+        nextState = "ACTIVE";
+      }
+    }
+
+    const sets = ["account_state = $1::account_state_enum", "paused_until = $2", "updated_at = NOW()"];
+    const params = [nextState, pausedUntil];
+    if (hideMyName !== null) {
+      sets.push(`hide_my_name = $${params.length + 1}`);
+      params.push(hideMyName);
+    }
+    params.push(userId);
+    await query(
+      `UPDATE users SET ${sets.join(", ")}
+       WHERE id = $${params.length}::uuid AND deleted_at IS NULL`,
+      params
+    );
+
+    const out = await query(
+      `SELECT account_state, paused_until, hide_my_name
+       FROM users WHERE id = $1::uuid LIMIT 1`,
+      [userId]
+    );
+    const u = out.rows[0] || {};
+    return res.status(200).json({
+      success: true,
+      message: "Account settings updated",
+      data: {
+        accountState: u.account_state,
+        pausedUntil: u.paused_until ? new Date(u.paused_until).toISOString() : null,
+        hideMyName: u.hide_my_name === true,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to update account settings",
+    });
+  }
+}
+
+/**
+ * Soft-delete with retention audit row (6 months). Chat surfaces show deleted-account state via existing chat rules.
+ */
+async function deleteAccount(req, res) {
+  const client = await pool.connect();
+  try {
+    const userId = req.auth.userId;
+    await client.query("BEGIN");
+    const uRes = await client.query(
+      `SELECT id, phone_e164, account_state, deleted_at
+       FROM users
+       WHERE id = $1::uuid
+       LIMIT 1
+       FOR UPDATE`,
+      [userId]
+    );
+    const u = uRes.rows[0];
+    if (!u || u.deleted_at) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+    if (String(u.account_state) === "BANNED") {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ success: false, message: "Account is banned" });
+    }
+    const delRes = await client.query(
+      `UPDATE users
+       SET account_state = 'DELETED'::account_state_enum,
+           deleted_at = NOW(),
+           paused_until = NULL,
+           updated_at = NOW()
+       WHERE id = $1::uuid
+       RETURNING deleted_at`,
+      [userId]
+    );
+    const deletedAt = delRes.rows[0]?.deleted_at;
+    await client.query(
+      `INSERT INTO user_account_deletion_audit (user_id, phone_e164, account_deleted_at, data_retention_until)
+       VALUES ($1::uuid, $2, $3::timestamptz, ($3::timestamptz + interval '6 months'))`,
+      [userId, u.phone_e164 || null, deletedAt]
+    );
+    await client.query("COMMIT");
+    return res.status(200).json({
+      success: true,
+      message: "Account deleted",
+      data: {
+        accountState: "DELETED",
+        accountDeletedAt: deletedAt ? new Date(deletedAt).toISOString() : null,
+        dataRetentionUntil: deletedAt
+          ? new Date(new Date(deletedAt).getTime() + 180 * 24 * 60 * 60 * 1000).toISOString()
+          : null,
+      },
+    });
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (_) {}
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to delete account",
+    });
+  } finally {
+    client.release();
+  }
+}
+
+/** Foreground app ping — updates scoring-related activity timestamp. */
+async function pingHeartbeat(req, res) {
+  try {
+    const userId = req.auth.userId;
+    await query(`UPDATE users SET last_active_at = NOW(), updated_at = NOW() WHERE id = $1`, [userId]);
+    return res.status(200).json({ success: true, message: "ok" });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Heartbeat failed",
+    });
+  }
+}
+
 module.exports = {
   getMe,
+  ackModerationWarning,
+  patchAccountSettings,
+  deleteAccount,
+  getMyFilters,
+  getPublicProfile,
+  pingHeartbeat,
+  sendFriendRequest,
+  sendCommentRequest,
+  ignoreProfile,
+  listIncomingFriendRequests,
+  listFriends,
+  unfriendUser,
+  blockUser,
+  reportUser,
+  undoIncomingFriendRequestIgnore,
+  respondToRequest,
+  updateMyFilters,
   updateOnboardingStep,
   updateProfileCore,
   updateOnboardingData,
   reverseGeocodeLocation,
   listIndianCities,
+  createVerifyLivenessSession,
+  previewVerifyLiveness,
+  completeVerifyLiveness,
 };

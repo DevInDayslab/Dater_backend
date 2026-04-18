@@ -8,7 +8,9 @@ function resolveUserAppRoute(user) {
   if (state === "PENDING_CAPTCHA") {
     return "/captcha-pending";
   }
-  if (state !== "ACTIVE" && state !== "PRIVACY_MODE" && state !== "PAUSED") {
+  /** Hidden-by-moderation uses normal app shell; client gates non-profile tabs. */
+  const inAppShellStates = new Set(["ACTIVE", "PRIVACY_MODE", "PAUSED", "HIDDEN_BY_MODERATION"]);
+  if (!inAppShellStates.has(state)) {
     return `/blocked/${state}`;
   }
   const onboardingUpdatedAt = user.onboarding_updated_at ? new Date(user.onboarding_updated_at).getTime() : null;
