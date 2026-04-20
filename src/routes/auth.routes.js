@@ -7,6 +7,8 @@ const router = express.Router();
 router.post("/request-otp", authController.requestOTP);
 router.post("/resend-otp", authController.resendOTP);
 router.post("/verify-otp", authController.verifyOTP);
+router.post("/verify-otp-and-login", authController.verifyOtpAndLogin);
+router.post("/preview-login-route", authController.previewLoginRoute);
 router.post("/precheck-login", authController.precheckLogin);
 router.post("/captcha-challenge", authController.createCaptchaChallenge);
 router.post("/complete-captcha", requireAuth, authController.completeCaptcha);

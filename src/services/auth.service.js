@@ -181,8 +181,11 @@ async function createCaptchaChallenge({ phone, ipAddress, deviceId, userAgent })
     throw new Error("A valid phone number is required");
   }
 
-  const needs =
-    (await latestPrecheckRequiresCaptcha(phoneE164)) || (await userHasPendingCaptchaByPhone(phoneE164));
+  const [precheckCaptcha, pendingCaptcha] = await Promise.all([
+    latestPrecheckRequiresCaptcha(phoneE164),
+    userHasPendingCaptchaByPhone(phoneE164),
+  ]);
+  const needs = precheckCaptcha || pendingCaptcha;
   if (!needs) {
     const err = new Error("Captcha is not required for this login attempt");
     err.code = "CAPTCHA_NOT_REQUIRED";
@@ -260,31 +263,24 @@ async function assertCaptchaForLogin({ phoneE164, captchaChallengeId, captchaAns
 
 async function getOrCreateUserByPhone(phoneE164, { ipAddress, deviceId, userAgent, consentAcceptedAt, consentSource }) {
   const phoneNumber = phoneE164.replace(/^\+91/, "");
-
-  const existing = await query(
-    `SELECT id, phone_e164, onboarding_completed_at, onboarding_step, onboarding_updated_at, account_state, underage_until
-     FROM users
-     WHERE phone_e164 = $1
-     LIMIT 1`,
-    [phoneE164]
-  );
   const consentTimestamp = consentAcceptedAt ? new Date(consentAcceptedAt) : null;
   const hasValidConsentTs = consentTimestamp && !Number.isNaN(consentTimestamp.getTime());
 
-  if (existing.rows.length > 0) {
-    const user = existing.rows[0];
-    await query(
-      `UPDATE users
+  const updatedExisting = await query(
+    `UPDATE users
        SET is_phone_verified = TRUE,
            last_active_at = NOW(),
            terms_accepted_at = COALESCE(terms_accepted_at, $2),
            privacy_accepted_at = COALESCE(privacy_accepted_at, $2),
            consent_source = COALESCE(consent_source, $3),
            updated_at = NOW()
-       WHERE id = $1`,
-      [user.id, hasValidConsentTs ? consentTimestamp.toISOString() : null, consentSource || null]
-    );
-    return { user, isNewUser: false };
+       WHERE phone_e164 = $1
+       RETURNING id, phone_e164, onboarding_completed_at, onboarding_step, onboarding_updated_at, account_state, underage_until`,
+    [phoneE164, hasValidConsentTs ? consentTimestamp.toISOString() : null, consentSource || null]
+  );
+
+  if (updatedExisting.rows.length > 0) {
+    return { user: updatedExisting.rows[0], isNewUser: false };
   }
 
   const created = await query(
@@ -421,9 +417,12 @@ async function createSessionAndToken({ userId, ipAddress, deviceId, userAgent })
   return { session, accessToken };
 }
 
-async function verifyAccessTokenAndLogin({
-  accessToken,
-  fallbackPhone = null,
+/**
+ * Shared session issuance after MSG91 has already proven the phone (widget JWT or SendOTP verify).
+ * @param {object} audit — `successAction` / `underageCaptchaSkipAction` for auth_login_attempts.action
+ */
+async function completeLoginWithVerifiedPhoneE164({
+  phoneE164,
   consentAcceptedAt = null,
   consentSource = null,
   captchaChallengeId = null,
@@ -431,30 +430,11 @@ async function verifyAccessTokenAndLogin({
   ipAddress,
   deviceId,
   userAgent,
+  msg91,
+  audit = {},
 }) {
-  const verifyResponse = await msg91Service.verifyAccessToken(accessToken);
-  const status = String(verifyResponse?.type || "").toLowerCase();
-  if (status !== "success") {
-    debugLog("auth_msg91_widget_verify_not_success", {
-      status,
-      message: verifyResponse?.message,
-      keys: verifyResponse && typeof verifyResponse === "object" ? Object.keys(verifyResponse) : [],
-    });
-    const error = new Error(verifyResponse?.message || "MSG91 access-token verification failed");
-    error.code = "MSG91_VERIFY_FAILED";
-    throw error;
-  }
-
-  const phoneE164 = extractPhoneFromMsg91(accessToken, verifyResponse) || parseE164(fallbackPhone);
-  if (!phoneE164) {
-    debugLog("auth_phone_extract_failed", {
-      fallbackPhone: maskPhoneDigits(fallbackPhone),
-      tokenPayloadKeys: Object.keys(decodeJwtPayload(accessToken)),
-    });
-    const error = new Error("Could not extract verified phone from MSG91 response");
-    error.code = "PHONE_EXTRACTION_FAILED";
-    throw error;
-  }
+  const successAction = audit.successAction || "VERIFY_ACCESS_TOKEN";
+  const underageCaptchaSkipAction = audit.underageCaptchaSkipAction || successAction;
 
   const captchaRequired = await latestPrecheckRequiresCaptcha(phoneE164);
   const cid = captchaChallengeId ? String(captchaChallengeId).trim() : "";
@@ -487,7 +467,7 @@ async function verifyAccessTokenAndLogin({
         ipAddress,
         deviceId,
         userAgent,
-        action: "VERIFY_ACCESS_TOKEN",
+        action: underageCaptchaSkipAction,
         status: "SUCCESS",
         reason: "underage_skips_captcha_pending",
         requiresCaptcha: true,
@@ -504,7 +484,7 @@ async function verifyAccessTokenAndLogin({
           expiresAt: session.expires_at,
           sessionId: session.id,
         },
-        msg91: verifyResponse,
+        msg91,
       };
     }
 
@@ -545,7 +525,7 @@ async function verifyAccessTokenAndLogin({
         expiresAt: session.expires_at,
         sessionId: session.id,
       },
-      msg91: verifyResponse,
+      msg91,
     };
   }
 
@@ -570,22 +550,15 @@ async function verifyAccessTokenAndLogin({
   const isNewUser = result.isNewUser;
   assertAllowedUserState(user);
 
-  await query(
+  const refreshed = await query(
     `UPDATE users
      SET account_state = CASE
            WHEN account_state = 'PENDING_CAPTCHA'::account_state_enum THEN 'ACTIVE'::account_state_enum
            ELSE account_state
          END,
          updated_at = NOW()
-     WHERE id = $1`,
-    [user.id]
-  );
-
-  const refreshed = await query(
-    `SELECT id, phone_e164, onboarding_completed_at, onboarding_step, onboarding_updated_at, account_state, underage_until
-     FROM users
      WHERE id = $1
-     LIMIT 1`,
+     RETURNING id, phone_e164, onboarding_completed_at, onboarding_step, onboarding_updated_at, account_state, underage_until`,
     [user.id]
   );
   user = refreshed.rows[0] || user;
@@ -602,7 +575,7 @@ async function verifyAccessTokenAndLogin({
     ipAddress,
     deviceId,
     userAgent,
-    action: "VERIFY_ACCESS_TOKEN",
+    action: successAction,
     status: "SUCCESS",
     reason: null,
     requiresCaptcha: false,
@@ -620,8 +593,108 @@ async function verifyAccessTokenAndLogin({
       expiresAt: session.expires_at,
       sessionId: session.id,
     },
-    msg91: verifyResponse,
+    msg91,
   };
+}
+
+async function verifyAccessTokenAndLogin({
+  accessToken,
+  fallbackPhone = null,
+  consentAcceptedAt = null,
+  consentSource = null,
+  captchaChallengeId = null,
+  captchaAnswer = null,
+  ipAddress,
+  deviceId,
+  userAgent,
+}) {
+  const verifyResponse = await msg91Service.verifyAccessToken(accessToken);
+  const status = String(verifyResponse?.type || "").toLowerCase();
+  if (status !== "success") {
+    debugLog("auth_msg91_widget_verify_not_success", {
+      status,
+      message: verifyResponse?.message,
+      keys: verifyResponse && typeof verifyResponse === "object" ? Object.keys(verifyResponse) : [],
+    });
+    const error = new Error(verifyResponse?.message || "MSG91 access-token verification failed");
+    error.code = "MSG91_VERIFY_FAILED";
+    throw error;
+  }
+
+  const phoneE164 = extractPhoneFromMsg91(accessToken, verifyResponse) || parseE164(fallbackPhone);
+  if (!phoneE164) {
+    debugLog("auth_phone_extract_failed", {
+      fallbackPhone: maskPhoneDigits(fallbackPhone),
+      tokenPayloadKeys: Object.keys(decodeJwtPayload(accessToken)),
+    });
+    const error = new Error("Could not extract verified phone from MSG91 response");
+    error.code = "PHONE_EXTRACTION_FAILED";
+    throw error;
+  }
+
+  return completeLoginWithVerifiedPhoneE164({
+    phoneE164,
+    consentAcceptedAt,
+    consentSource,
+    captchaChallengeId,
+    captchaAnswer,
+    ipAddress,
+    deviceId,
+    userAgent,
+    msg91: verifyResponse,
+    audit: {
+      successAction: "VERIFY_ACCESS_TOKEN",
+      underageCaptchaSkipAction: "VERIFY_ACCESS_TOKEN",
+    },
+  });
+}
+
+/** MSG91 SendOTP API verify + same Dater session path as the widget flow. */
+async function verifyOtpAndLogin({
+  phone,
+  otp,
+  consentAcceptedAt = null,
+  consentSource = null,
+  captchaChallengeId = null,
+  captchaAnswer = null,
+  ipAddress,
+  deviceId,
+  userAgent,
+}) {
+  const verifyResponse = await msg91Service.verifyOTP(phone, otp);
+  const status = String(verifyResponse?.type || "").toLowerCase();
+  if (status !== "success") {
+    debugLog("auth_msg91_send_otp_verify_not_success", {
+      status,
+      message: verifyResponse?.message,
+    });
+    const error = new Error(verifyResponse?.message || "OTP verification failed");
+    error.code = "OTP_VERIFY_FAILED";
+    throw error;
+  }
+
+  const phoneE164 = parseE164(phone);
+  if (!phoneE164) {
+    const error = new Error("Could not parse phone number");
+    error.code = "INVALID_PHONE_NUMBER";
+    throw error;
+  }
+
+  return completeLoginWithVerifiedPhoneE164({
+    phoneE164,
+    consentAcceptedAt,
+    consentSource,
+    captchaChallengeId,
+    captchaAnswer,
+    ipAddress,
+    deviceId,
+    userAgent,
+    msg91: verifyResponse,
+    audit: {
+      successAction: "VERIFY_OTP_LOGIN",
+      underageCaptchaSkipAction: "VERIFY_OTP_LOGIN",
+    },
+  });
 }
 
 async function completeCaptchaLogin({ userId, captchaChallengeId, captchaAnswer, ipAddress, deviceId, userAgent }) {
@@ -693,6 +766,43 @@ async function completeCaptchaLogin({ userId, captchaChallengeId, captchaAnswer,
   };
 }
 
+/**
+ * Read-only routing hint for the OTP screen: mirrors [resolveUserAppRoute] from the DB without
+ * running login side-effects (no user row mutations).
+ */
+async function previewLoginRouteByPhone({ phone }) {
+  const phoneE164 = parseE164(phone);
+  if (!phoneE164) {
+    const err = new Error("A valid phone number is required");
+    err.code = "INVALID_PHONE_NUMBER";
+    throw err;
+  }
+  const userRes = await query(
+    `SELECT id, onboarding_completed_at, onboarding_step, onboarding_updated_at, account_state, underage_until
+     FROM users
+     WHERE phone_e164 = $1
+     LIMIT 1`,
+    [phoneE164]
+  );
+  if (userRes.rows.length === 0) {
+    return {
+      phoneE164,
+      userExists: false,
+      nextRoute: "/onboarding/resume",
+      onboardingStep: "onboarding_name",
+      accountState: "ACTIVE",
+    };
+  }
+  const user = userRes.rows[0];
+  return {
+    phoneE164,
+    userExists: true,
+    nextRoute: resolveUserAppRoute(user),
+    onboardingStep: String(user.onboarding_step || ""),
+    accountState: String(user.account_state || "ACTIVE"),
+  };
+}
+
 async function logout({ userId, sessionId }) {
   const res = await query(
     `UPDATE user_sessions
@@ -712,7 +822,9 @@ async function logout({ userId, sessionId }) {
 
 module.exports = {
   precheckLogin,
+  previewLoginRouteByPhone,
   verifyAccessTokenAndLogin,
+  verifyOtpAndLogin,
   completeCaptchaLogin,
   createCaptchaChallenge,
   logout,

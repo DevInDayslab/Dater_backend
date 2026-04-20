@@ -145,6 +145,48 @@ async function completeCaptcha(req, res) {
   }
 }
 
+async function verifyOtpAndLogin(req, res) {
+  try {
+    const { phone, otp, consentAcceptedAt, consentSource, captchaChallengeId, captchaAnswer } = req.body;
+    assertValidTenDigitIndianPhone(phone);
+    debugLog("auth_verify_otp_login_start", { phone: maskPhoneDigits(phone) });
+    const result = await authService.verifyOtpAndLogin({
+      phone,
+      otp,
+      consentAcceptedAt: consentAcceptedAt || null,
+      consentSource: consentSource || null,
+      captchaChallengeId: captchaChallengeId || null,
+      captchaAnswer: captchaAnswer || null,
+      ...requestMeta(req),
+    });
+    debugLog("auth_verify_otp_login_ok", {
+      phone: maskPhoneDigits(phone),
+      userId: result.userId,
+      nextRoute: result.nextRoute,
+    });
+    return res.status(200).json({
+      success: true,
+      message: "Login successful",
+      data: result,
+    });
+  } catch (error) {
+    const code = error.code || "VERIFY_OTP_LOGIN_FAILED";
+    const statusCode =
+      code === "BANNED" || code === "DELETED" ? 403 : 400;
+    debugLog("auth_verify_otp_login_fail", {
+      phone: maskPhoneDigits(req.body?.phone),
+      code,
+      errorMessage: error.message,
+    });
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || "OTP login failed",
+      code,
+      error: error.response?.data || error.message,
+    });
+  }
+}
+
 async function verifyAccessToken(req, res) {
   try {
     const { accessToken, phone, consentAcceptedAt, consentSource, captchaChallengeId, captchaAnswer } =
@@ -229,6 +271,38 @@ async function createCaptchaChallenge(req, res) {
   }
 }
 
+async function previewLoginRoute(req, res) {
+  try {
+    const { phone } = req.body;
+    assertValidTenDigitIndianPhone(phone);
+    debugLog("auth_preview_login_route_start", { phone: maskPhoneDigits(phone) });
+    const result = await authService.previewLoginRouteByPhone({ phone });
+    debugLog("auth_preview_login_route_ok", {
+      phone: maskPhoneDigits(phone),
+      userExists: result.userExists,
+      nextRoute: result.nextRoute,
+    });
+    return res.status(200).json({
+      success: true,
+      message: "Login route preview",
+      data: result,
+    });
+  } catch (error) {
+    const code = error.code || "PREVIEW_LOGIN_ROUTE_FAILED";
+    debugLog("auth_preview_login_route_fail", {
+      phone: maskPhoneDigits(req.body?.phone),
+      code,
+      error: error.message,
+    });
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Could not preview login route",
+      code,
+      error: error.message,
+    });
+  }
+}
+
 async function precheckLogin(req, res) {
   try {
     const { phone } = req.body;
@@ -287,8 +361,10 @@ module.exports = {
   requestOTP,
   resendOTP,
   verifyOTP,
+  verifyOtpAndLogin,
   createCaptchaChallenge,
   completeCaptcha,
+  previewLoginRoute,
   precheckLogin,
   verifyAccessToken,
   logout,
