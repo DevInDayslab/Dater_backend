@@ -1,21 +1,23 @@
 /**
- * Seeds ~25 synthetic users (distinct phone range) who each send the viewer
- * one pending friend interaction: alternating plain REQUEST vs COMMENT_REQUEST.
+ * Seeds a fixed pool of synthetic “power user” profiles (default 50) that send
+ * incoming friend interactions to whichever viewer phone you pass in.
  *
- * Reuses feed-compatible profile rows from seedFeedProfilesForViewerPhone so
- * listIncomingFriendRequests (gender filter + primary photo) returns them.
- *
- * After profiles are committed, uses the same service calls as the feed API:
- * social.sendFriendRequest(senderId, viewerId) and sendCommentRequest(...),
- * including notification_events and paid-comment debit (senders get a small
- * comment-wallet top-up first so COMMENT_REQUEST succeeds).
+ * - Profiles are upserted by phone_e164 (ON CONFLICT in upsertCompatibleCandidate);
+ *   we never DELETE synthetic users, so bots stay stable across runs and other
+ *   viewers keep valid sender rows.
+ * - For each bot → viewer pair: if a PENDING REQUEST/COMMENT_REQUEST already
+ *   exists, or the pair is already friends, we skip (no duplicate constraint
+ *   errors, no nuking relationships).
+ * - Otherwise we call the same APIs as production: sendFriendRequest /
+ *   sendCommentRequest (plus comment-wallet top-up for COMMENT_REQUEST).
  *
  * From backend/:
  *   npm run seed:notifications:viewer -- 9354120990
- *   npm run seed:notifications:viewer -- 9354120990 30
- *   npm run seed:notifications:viewer -- 9354120990 30 20 10
+ *   npm run seed:notifications:viewer -- 9354120990 50 25 25
+ *   npm run seed:notifications:viewer -- 9354120990 50 25 25 98873   # optional 5–6 digit bot pool prefix
  *
- * Removes prior batch: phone_e164 LIKE '+91988773_____' (see NOTIF_PHONE_PREFIX).
+ * Default bot pool uses phonePrefix 98873 → +919887300001 … +919887300050
+ * (does not overlap feed seed +91988770…).
  */
 require("dotenv").config();
 const path = require("path");
@@ -29,8 +31,15 @@ const {
   upsertCompatibleCandidate,
 } = require("./seedFeedProfilesForViewerPhone");
 
-/** 6-digit national prefix; full numbers +91 + prefix + 5-digit index (does not overlap feed seed 988770). */
-const NOTIF_PHONE_PREFIX = "988773";
+/** 5-digit prefix recommended: +91 + prefix + 5-digit index = 10-digit numbers. */
+const DEFAULT_NOTIF_BOT_POOL_PREFIX = "98873";
+
+function parseBotPoolPrefixOverride(argv6) {
+  if (argv6 == null) return null;
+  const s = String(argv6).trim();
+  if (/^\d{5}$/.test(s) || /^\d{6}$/.test(s)) return s;
+  return null;
+}
 
 const COMMENT_SAMPLES = [
   "Loved your prompts — would love to chat sometime.",
@@ -56,7 +65,6 @@ function pickComment(i) {
 
 function buildCommentText(i) {
   const base = pickComment(i);
-  // Every third comment is intentionally long (close to 150 chars) for UI stress testing.
   if (i % 3 !== 0) return base;
   const suffix =
     " Thoughtful people, direct communication, and a little humor make conversations better; if you are open, I'd enjoy getting to know you.";
@@ -64,11 +72,6 @@ function buildCommentText(i) {
   return raw.length <= 150 ? raw : raw.slice(0, 150);
 }
 
-async function deleteNotifSeedBatch(client) {
-  await client.query(`DELETE FROM users WHERE phone_e164 LIKE $1`, [`+91${NOTIF_PHONE_PREFIX}%`]);
-}
-
-/** Same path as feed: sendCommentRequest debits one paid comment from sender. */
 async function grantSenderCommentCredits(pool, userId) {
   await pool.query(
     `INSERT INTO user_comment_wallet (user_id, remaining_paid_comments, updated_at)
@@ -78,6 +81,32 @@ async function grantSenderCommentCredits(pool, userId) {
        updated_at = NOW()`,
     [userId]
   );
+}
+
+function orderedPair(a, b) {
+  return a < b ? [a, b] : [b, a];
+}
+
+async function alreadyFriends(pool, userIdA, userIdB) {
+  const [u1, u2] = orderedPair(userIdA, userIdB);
+  const r = await pool.query(
+    `SELECT 1 FROM friendships WHERE u1_id = $1 AND u2_id = $2 LIMIT 1`,
+    [u1, u2]
+  );
+  return r.rowCount > 0;
+}
+
+async function hasPendingOutgoingRequest(pool, senderId, targetId) {
+  const r = await pool.query(
+    `SELECT 1 FROM user_interactions
+     WHERE user_id = $1
+       AND target_id = $2
+       AND interaction_type IN ('REQUEST', 'COMMENT_REQUEST')
+       AND request_status = 'PENDING'
+     LIMIT 1`,
+    [senderId, targetId]
+  );
+  return r.rowCount > 0;
 }
 
 async function main() {
@@ -94,6 +123,8 @@ async function main() {
   const normalCount = hasSplit ? Math.max(0, parsedNormal) : Math.ceil(senderCount * 0.5);
   const commentCount = hasSplit ? Math.max(0, parsedComment) : senderCount - normalCount;
   const totalSenders = Math.min(60, Math.max(1, normalCount + commentCount));
+
+  const botPoolPrefix = parseBotPoolPrefixOverride(process.argv[6]) ?? DEFAULT_NOTIF_BOT_POOL_PREFIX;
 
   const client = new Client({
     connectionString: process.env.DATABASE_URL,
@@ -156,12 +187,10 @@ async function main() {
       viewer.only_verified_profiles = viewer.only_verified_profiles === true;
     }
 
-    await deleteNotifSeedBatch(client);
-
     const staged = [];
     for (let i = 1; i <= totalSenders; i += 1) {
       const profile = await upsertCompatibleCandidate(client, viewer, i, {
-        phonePrefix: NOTIF_PHONE_PREFIX,
+        phonePrefix: botPoolPrefix,
       });
       staged.push({ profile, index: i });
     }
@@ -173,45 +202,112 @@ async function main() {
     const { pool } = require("../config/db");
     const { sendFriendRequest, sendCommentRequest } = require("../services/social.service");
 
-    const created = [];
+    const results = [];
+    let sentCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+
     for (const { profile, index } of staged) {
+      const senderId = profile.userId;
       const asComment = index > normalCount;
+      const interactionType = asComment ? "COMMENT_REQUEST" : "REQUEST";
       const commentText = asComment ? buildCommentText(index) : null;
-      if (asComment) {
-        await grantSenderCommentCredits(pool, profile.userId);
-        await sendCommentRequest(profile.userId, viewerId, commentText);
-      } else {
-        await sendFriendRequest(profile.userId, viewerId);
+
+      const pending = await hasPendingOutgoingRequest(pool, senderId, viewerId);
+      if (pending) {
+        skippedCount += 1;
+        results.push({
+          index,
+          fromUserId: senderId,
+          phone: profile.phone_e164,
+          name: profile.name,
+          interactionType,
+          outcome: "skipped",
+          reason: "PENDING_REQUEST_ALREADY_EXISTS",
+        });
+        continue;
       }
-      created.push({
-        fromUserId: profile.userId,
-        phone: profile.phone_e164,
-        name: profile.name,
-        interactionType: asComment ? "COMMENT_REQUEST" : "REQUEST",
-        commentPreview: commentText,
-      });
+
+      const friends = await alreadyFriends(pool, senderId, viewerId);
+      if (friends) {
+        skippedCount += 1;
+        results.push({
+          index,
+          fromUserId: senderId,
+          phone: profile.phone_e164,
+          name: profile.name,
+          interactionType,
+          outcome: "skipped",
+          reason: "ALREADY_FRIENDS",
+        });
+        continue;
+      }
+
+      try {
+        if (asComment) {
+          await grantSenderCommentCredits(pool, senderId);
+          await sendCommentRequest(senderId, viewerId, commentText);
+        } else {
+          await sendFriendRequest(senderId, viewerId);
+        }
+        sentCount += 1;
+        results.push({
+          index,
+          fromUserId: senderId,
+          phone: profile.phone_e164,
+          name: profile.name,
+          interactionType,
+          commentPreview: commentText,
+          outcome: "sent",
+        });
+      } catch (err) {
+        failedCount += 1;
+        const code = err.code || err.message;
+        results.push({
+          index,
+          fromUserId: senderId,
+          phone: profile.phone_e164,
+          name: profile.name,
+          interactionType,
+          outcome: "failed",
+          error: String(err.message || err),
+          code: typeof code === "string" ? code : undefined,
+        });
+      }
     }
 
     console.log(
       JSON.stringify(
         {
-          success: true,
+          success: failedCount === 0,
           viewerPhone: phoneE164,
           viewerId,
-          seededSenders: created.length,
+          botPoolPrefix,
+          prefixSource: parseBotPoolPrefixOverride(process.argv[6]) ? "argv[6] override" : "default pool",
+          profileUpsertCount: staged.length,
           requestedSplit: { normalCount, commentCount },
-          requestCount: created.filter((r) => r.interactionType === "REQUEST").length,
-          commentRequestCount: created.filter((r) => r.interactionType === "COMMENT_REQUEST").length,
+          summary: {
+            sent: sentCount,
+            skipped: skippedCount,
+            failed: failedCount,
+          },
+          requestCount: results.filter((r) => r.interactionType === "REQUEST" && r.outcome === "sent").length,
+          commentRequestCount: results.filter(
+            (r) => r.interactionType === "COMMENT_REQUEST" && r.outcome === "sent"
+          ).length,
           note:
-            "Ensured viewer has Woman/Man/Nonbinary in user_filter_preferred_genders (missing only). " +
-            `Removed any prior +91${NOTIF_PHONE_PREFIX}_____ seed users before insert. ` +
-            "Interactions created via sendFriendRequest / sendCommentRequest (same as feed API).",
-          senders: created,
+            "Synthetic users are upserted by phone (never deleted). Sends are skipped when a PENDING " +
+            "REQUEST/COMMENT_REQUEST already exists or the pair is already friends. " +
+            "Uses sendFriendRequest / sendCommentRequest (same as feed API).",
+          results,
         },
         null,
         2
       )
     );
+    if (failedCount > 0) {
+      process.exitCode = 1;
+    }
   } catch (e) {
     if (!profileTransactionCommitted) {
       try {

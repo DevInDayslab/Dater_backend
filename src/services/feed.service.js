@@ -354,7 +354,16 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
              vu.location IS NOT NULL
              AND c.location IS NOT NULL
              AND (
-               (v.living_in_city_mode = 'MANUAL_SWITCH' AND c.living_in_city = v.preferred_location_city)
+              (
+                v.living_in_city_mode = 'MANUAL_SWITCH'
+                AND NULLIF(TRIM(c.living_in_city), '') IS NOT NULL
+                AND NULLIF(TRIM(v.preferred_location_city), '') IS NOT NULL
+                AND (
+                  LOWER(TRIM(c.living_in_city)) = LOWER(TRIM(v.preferred_location_city))
+                  OR LOWER(TRIM(SPLIT_PART(c.living_in_city, ',', 1))) =
+                     LOWER(TRIM(SPLIT_PART(v.preferred_location_city, ',', 1)))
+                )
+              )
                OR (
                  v.living_in_city_mode <> 'MANUAL_SWITCH'
                  AND ST_DWithin(
@@ -369,7 +378,11 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
              vu.location IS NULL
              AND NULLIF(TRIM(vu.living_in_city), '') IS NOT NULL
              AND NULLIF(TRIM(c.living_in_city), '') IS NOT NULL
-             AND LOWER(TRIM(vu.living_in_city)) = LOWER(TRIM(c.living_in_city))
+            AND (
+              LOWER(TRIM(vu.living_in_city)) = LOWER(TRIM(c.living_in_city))
+              OR LOWER(TRIM(SPLIT_PART(vu.living_in_city, ',', 1))) =
+                 LOWER(TRIM(SPLIT_PART(c.living_in_city, ',', 1)))
+            )
            )
          )
          AND c.age_years BETWEEN v.age_min AND v.age_max
