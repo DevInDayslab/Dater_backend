@@ -34,6 +34,10 @@ function isUuidLike(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
+async function normalizePrimaryPhotoUrl(rawUrl) {
+  return s3Media.presignReadIfOurS3Object(String(rawUrl || "").trim());
+}
+
 async function ensureParticipant(threadId, userId) {
   const res = await query(
     `SELECT 1
@@ -225,25 +229,28 @@ async function listThreads(viewerId, { sort = "RECENT", search = "" } = {}) {
      ORDER BY CASE WHEN COALESCE(s.pinned_to_bottom, false) THEN 1 ELSE 0 END, ${orderClause}`,
     params
   );
-  return res.rows.map((row) => ({
-    threadId: row.thread_id,
-    peerUserId: row.peer_user_id,
-    name: row.peer_name || "",
-    primaryPhotoUrl: row.primary_photo_url || "",
-    lastMessage: row.last_message_text || "",
-    lastMessageAt: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
-    lastMessageFromMe: row.last_message_from_me === true,
-    peerLastActiveAt: row.peer_last_active_at ? new Date(row.peer_last_active_at).toISOString() : null,
-    unreadCount: Number(row.unread_count || 0),
-    hasReplyBadge: row.has_reply_badge === true,
-    isMuted: row.is_muted === true,
-    relationshipState: row.relationship_state || "ACTIVE",
-    canViewProfile: row.can_view_profile !== false,
-    hasStoryActive: row.has_story_active === true,
-    viewerHasUnseenStory: row.story_ring_has_unseen === true,
-    isOnline: row.peer_last_active_at ? new Date(row.peer_last_active_at).getTime() >= Date.now() - 20 * 60 * 1000 : false,
-    distanceKm: row.distance_km != null ? Number(row.distance_km) : null,
-  }));
+  const items = await Promise.all(
+    res.rows.map(async (row) => ({
+      threadId: row.thread_id,
+      peerUserId: row.peer_user_id,
+      name: row.peer_name || "",
+      primaryPhotoUrl: await normalizePrimaryPhotoUrl(row.primary_photo_url || ""),
+      lastMessage: row.last_message_text || "",
+      lastMessageAt: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
+      lastMessageFromMe: row.last_message_from_me === true,
+      peerLastActiveAt: row.peer_last_active_at ? new Date(row.peer_last_active_at).toISOString() : null,
+      unreadCount: Number(row.unread_count || 0),
+      hasReplyBadge: row.has_reply_badge === true,
+      isMuted: row.is_muted === true,
+      relationshipState: row.relationship_state || "ACTIVE",
+      canViewProfile: row.can_view_profile !== false,
+      hasStoryActive: row.has_story_active === true,
+      viewerHasUnseenStory: row.story_ring_has_unseen === true,
+      isOnline: row.peer_last_active_at ? new Date(row.peer_last_active_at).getTime() >= Date.now() - 20 * 60 * 1000 : false,
+      distanceKm: row.distance_km != null ? Number(row.distance_km) : null,
+    }))
+  );
+  return items;
 }
 
 async function unfriendByThread(viewerId, threadId) {
@@ -753,7 +760,7 @@ async function getOrCreateDirectThread(viewerId, targetUserId) {
     threadId,
     peerUserId: targetId,
     name: target.name || "",
-    primaryPhotoUrl: photoRes.rows[0]?.photo_url || "",
+    primaryPhotoUrl: await normalizePrimaryPhotoUrl(photoRes.rows[0]?.photo_url || ""),
     hasStoryActive: sr.has_active === true,
     viewerHasUnseenStory: sr.has_unseen === true,
     isOnline: target.last_active_at
