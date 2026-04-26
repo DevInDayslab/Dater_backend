@@ -636,7 +636,7 @@ async function listIncomingFriendRequests(viewerId, { page = 1, pageSize = 30 } 
            )
          )
        )
-     ORDER BY ui.created_at DESC
+     ORDER BY ui.created_at DESC, ui.id DESC
      LIMIT $2
      OFFSET $3`,
     [viewerId, fetchLimit, offset]

@@ -130,6 +130,12 @@ const mockPeopleImageFiles = (() => {
     return [];
   }
 })();
+if (mockPeopleImageFiles.length === 0) {
+  throw new Error(
+    `No seed images found in ${mockPeopleImagesDir}. ` +
+      "Seeding is restricted to mock-people-images assets only."
+  );
+}
 
 function pickSeedPhotoFiles(index) {
   if (mockPeopleImageFiles.length > 0) {
@@ -352,16 +358,18 @@ async function upsertCompatibleCandidate(client, viewer, index, options = {}) {
   let photoOneS3Key = null;
   let photoTwoS3Key = null;
   const pickedSeedFiles = pickSeedPhotoFiles(index);
-  if (pickedSeedFiles.length >= 2) {
-    const first = await uploadSeedPhotoToS3({ userId, filename: pickedSeedFiles[0] });
-    const second = await uploadSeedPhotoToS3({ userId, filename: pickedSeedFiles[1] });
-    photoOne = first.photoUrl;
-    photoTwo = second.photoUrl;
-    photoOneS3Key = first.s3Key;
-    photoTwoS3Key = second.s3Key;
-  } else {
-    [photoOne, photoTwo] = buildPhotoUrls(genderMain, index);
+  if (pickedSeedFiles.length < 2) {
+    throw new Error(
+      "Insufficient mock seed images to assign two photos per profile. " +
+        "Please add more files to mock-people-images."
+    );
   }
+  const first = await uploadSeedPhotoToS3({ userId, filename: pickedSeedFiles[0] });
+  const second = await uploadSeedPhotoToS3({ userId, filename: pickedSeedFiles[1] });
+  photoOne = first.photoUrl;
+  photoTwo = second.photoUrl;
+  photoOneS3Key = first.s3Key;
+  photoTwoS3Key = second.s3Key;
 
   await client.query(
     `UPDATE users
