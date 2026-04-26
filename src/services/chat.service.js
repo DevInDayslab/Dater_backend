@@ -76,8 +76,15 @@ async function getThreadPeer(threadId, viewerId) {
   return res.rows[0] || null;
 }
 
-async function evaluateChatLock({ threadId, senderId }) {
-  const senderRes = await query(
+async function acquireChatSendLock(client, threadId, senderId) {
+  await client.query(
+    `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+    [`chat-send:${String(threadId || "").trim()}:${String(senderId || "").trim()}`]
+  );
+}
+
+async function evaluateChatLockWithRunner(runQuery, { threadId, senderId }, { lockRestrictionRow = false } = {}) {
+  const senderRes = await runQuery(
     `SELECT id, gender_main, gender, is_premium, premium_started_at, premium_expires_at
      FROM users
      WHERE id = $1
@@ -94,7 +101,22 @@ async function evaluateChatLock({ threadId, senderId }) {
     return { isLocked: false, reason: "PREMIUM", unlocksAt: null };
   }
 
-  const peer = await getThreadPeer(threadId, senderId);
+  const peerRes = await runQuery(
+    `SELECT u.id,
+            u.name,
+            u.gender_main,
+            u.gender,
+            u.is_premium,
+            u.premium_started_at,
+            u.premium_expires_at
+     FROM chat_thread_participants p
+     JOIN users u ON u.id = p.user_id
+     WHERE p.thread_id = $1
+       AND p.user_id <> $2
+     LIMIT 1`,
+    [threadId, senderId]
+  );
+  const peer = peerRes.rows[0] || null;
   if (!peer) {
     const error = new Error("Thread peer not found");
     error.code = "THREAD_PEER_NOT_FOUND";
@@ -106,10 +128,19 @@ async function evaluateChatLock({ threadId, senderId }) {
     return { isLocked: false, reason: "UNRESTRICTED_MATRIX", unlocksAt: null };
   }
 
-  const restrictionsRes = await query(
+  if (lockRestrictionRow) {
+    await runQuery(
+      `INSERT INTO chat_restrictions (user_id, target_id, message_count, is_unlocked)
+       VALUES ($1, $2, 0, FALSE)
+       ON CONFLICT (user_id, target_id) DO NOTHING`,
+      [senderId, peer.id]
+    );
+  }
+  const restrictionsRes = await runQuery(
     `SELECT is_unlocked, is_locally_unlocked
      FROM chat_restrictions
      WHERE user_id = $1 AND target_id = $2
+     ${lockRestrictionRow ? "FOR UPDATE" : ""}
      LIMIT 1`,
     [senderId, peer.id]
   );
@@ -118,7 +149,7 @@ async function evaluateChatLock({ threadId, senderId }) {
     return { isLocked: false, reason: "CHAT_UNLOCKED", unlocksAt: null };
   }
 
-  const countRes = await query(
+  const countRes = await runQuery(
     `SELECT COUNT(*)::int AS c,
             MAX(created_at) AS latest_at
      FROM chat_messages
@@ -136,6 +167,11 @@ async function evaluateChatLock({ threadId, senderId }) {
   const latest = countRes.rows[0]?.latest_at;
   const unlocksAt = latest ? new Date(new Date(latest).getTime() + 60 * 60 * 1000).toISOString() : null;
   return { isLocked: true, reason: "RATE_LIMIT", unlocksAt };
+}
+
+async function evaluateChatLock({ threadId, senderId }, { client = null, lockRestrictionRow = false } = {}) {
+  const runQuery = client?.query?.bind(client) || query;
+  return evaluateChatLockWithRunner(runQuery, { threadId, senderId }, { lockRestrictionRow });
 }
 
 async function listThreads(viewerId, { sort = "RECENT", search = "" } = {}) {
@@ -443,70 +479,83 @@ async function listThreadMessages(viewerId, threadId, { limit = 50, before = nul
 }
 
 async function sendMessage(viewerId, threadId, text, replyToMessageId = "") {
-  const ok = await ensureParticipant(threadId, viewerId);
-  if (!ok) {
-    const error = new Error("Thread not found");
-    error.code = "THREAD_NOT_FOUND";
-    throw error;
-  }
-  const viewerStateRes = await query(
-    `SELECT COALESCE(is_deleted_from_inbox, false) AS is_deleted_from_inbox,
-            COALESCE(relationship_state::text, 'ACTIVE') AS relationship_state
-     FROM chat_thread_user_state
-     WHERE thread_id = $1
-       AND user_id = $2
-     LIMIT 1`,
-    [threadId, viewerId]
-  );
-  const viewerState = viewerStateRes.rows[0];
-  if (
-    viewerState &&
-    (viewerState.is_deleted_from_inbox === true ||
-      ["CHAT_ENDED", "BLOCKED", "DELETED_ACCOUNT"].includes(
-        String(viewerState.relationship_state || "").trim().toUpperCase()
-      ))
-  ) {
-    const error = new Error("Chat unavailable");
-    error.code = "CHAT_UNAVAILABLE";
-    throw error;
-  }
   const body = String(text || "").trim();
   if (!body) {
     const error = new Error("Message text is required");
     error.code = "MESSAGE_TEXT_REQUIRED";
     throw error;
   }
-  const lock = await evaluateChatLock({ threadId, senderId: viewerId });
-  if (lock.isLocked) {
-    const error = new Error("Chat is temporarily locked");
-    error.code = "CHAT_LOCKED_PAYWALL";
-    error.unlocksAt = lock.unlocksAt;
-    throw error;
-  }
-  const rawReplyId = String(replyToMessageId || "").trim();
-  const normalizedReplyId = isUuidLike(rawReplyId) ? rawReplyId : "";
-  let safeReplyId = null;
-  if (normalizedReplyId && isUuidLike(normalizedReplyId)) {
-    const replyRes = await query(
-      `SELECT id
-       FROM chat_messages
-       WHERE id = $1
-         AND thread_id = $2
-         AND deleted_at IS NULL
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const okRes = await client.query(
+      `SELECT 1
+       FROM chat_thread_participants
+       WHERE thread_id = $1 AND user_id = $2
        LIMIT 1`,
-      [normalizedReplyId, threadId]
+      [threadId, viewerId]
     );
-    if (replyRes.rowCount > 0) safeReplyId = normalizedReplyId;
-  }
-  const insertRes = await query(
-    `INSERT INTO chat_messages (thread_id, sender_type, sender_user_id, message_type, message_text, reply_to_message_id)
-     VALUES ($1, 'USER', $2, 'TEXT', $3, $4)
-     RETURNING id, created_at`,
-    [threadId, viewerId, body, safeReplyId]
-  );
-  const message = insertRes.rows[0];
-  await query(`UPDATE chat_threads SET last_message_at = NOW() WHERE id = $1`, [threadId]);
-  await query(
+    if (okRes.rowCount === 0) {
+      const error = new Error("Thread not found");
+      error.code = "THREAD_NOT_FOUND";
+      throw error;
+    }
+    const viewerStateRes = await client.query(
+      `SELECT COALESCE(is_deleted_from_inbox, false) AS is_deleted_from_inbox,
+              COALESCE(relationship_state::text, 'ACTIVE') AS relationship_state
+       FROM chat_thread_user_state
+       WHERE thread_id = $1
+         AND user_id = $2
+       LIMIT 1`,
+      [threadId, viewerId]
+    );
+    const viewerState = viewerStateRes.rows[0];
+    if (
+      viewerState &&
+      (viewerState.is_deleted_from_inbox === true ||
+        ["CHAT_ENDED", "BLOCKED", "DELETED_ACCOUNT"].includes(
+          String(viewerState.relationship_state || "").trim().toUpperCase()
+        ))
+    ) {
+      const error = new Error("Chat unavailable");
+      error.code = "CHAT_UNAVAILABLE";
+      throw error;
+    }
+    await acquireChatSendLock(client, threadId, viewerId);
+    const lock = await evaluateChatLock(
+      { threadId, senderId: viewerId },
+      { client, lockRestrictionRow: true }
+    );
+    if (lock.isLocked) {
+      const error = new Error("Chat is temporarily locked");
+      error.code = "CHAT_LOCKED_PAYWALL";
+      error.unlocksAt = lock.unlocksAt;
+      throw error;
+    }
+    const rawReplyId = String(replyToMessageId || "").trim();
+    const normalizedReplyId = isUuidLike(rawReplyId) ? rawReplyId : "";
+    let safeReplyId = null;
+    if (normalizedReplyId && isUuidLike(normalizedReplyId)) {
+      const replyRes = await client.query(
+        `SELECT id
+         FROM chat_messages
+         WHERE id = $1
+           AND thread_id = $2
+           AND deleted_at IS NULL
+         LIMIT 1`,
+        [normalizedReplyId, threadId]
+      );
+      if (replyRes.rowCount > 0) safeReplyId = normalizedReplyId;
+    }
+    const insertRes = await client.query(
+      `INSERT INTO chat_messages (thread_id, sender_type, sender_user_id, message_type, message_text, reply_to_message_id)
+       VALUES ($1, 'USER', $2, 'TEXT', $3, $4)
+       RETURNING id, created_at`,
+      [threadId, viewerId, body, safeReplyId]
+    );
+    const message = insertRes.rows[0];
+    await client.query(`UPDATE chat_threads SET last_message_at = NOW() WHERE id = $1`, [threadId]);
+    await client.query(
     `UPDATE chat_thread_user_state
      SET unread_count_cache = 0,
          has_reply_badge = false,
@@ -514,9 +563,9 @@ async function sendMessage(viewerId, threadId, text, replyToMessageId = "") {
          updated_at = NOW()
      WHERE thread_id = $1
        AND user_id = $2`,
-    [threadId, viewerId]
-  );
-  await query(
+      [threadId, viewerId]
+    );
+    await client.query(
     `UPDATE chat_thread_user_state
      SET unread_count_cache = unread_count_cache + 1,
          has_reply_badge = true,
@@ -526,12 +575,19 @@ async function sendMessage(viewerId, threadId, text, replyToMessageId = "") {
          updated_at = NOW()
      WHERE thread_id = $1
        AND user_id <> $2`,
-    [threadId, viewerId]
-  );
-  return {
-    id: message.id,
-    createdAt: message.created_at ? new Date(message.created_at).toISOString() : null,
-  };
+      [threadId, viewerId]
+    );
+    await client.query("COMMIT");
+    return {
+      id: message.id,
+      createdAt: message.created_at ? new Date(message.created_at).toISOString() : null,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function unlockThreadLocally(viewerId, threadId) {
@@ -793,4 +849,5 @@ module.exports = {
   setThreadMuted,
   deleteThreadFromInbox,
   getOrCreateDirectThread,
+  acquireChatSendLock,
 };

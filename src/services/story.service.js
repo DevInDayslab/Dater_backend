@@ -233,9 +233,12 @@ async function addStoryReplyToChat(viewerId, storyId, rawText) {
     const threadInfo = await chatService.getOrCreateDirectThread(viewerId, ownerId);
     const threadId = threadInfo.threadId;
 
-    const lock = await chatService.evaluateChatLock({ threadId, senderId: viewerId });
+    await chatService.acquireChatSendLock(client, threadId, viewerId);
+    const lock = await chatService.evaluateChatLock(
+      { threadId, senderId: viewerId },
+      { client, lockRestrictionRow: true }
+    );
     if (lock.isLocked) {
-      await client.query("ROLLBACK");
       const e = new Error("Chat is temporarily locked");
       e.code = "CHAT_LOCKED_PAYWALL";
       e.unlocksAt = lock.unlocksAt;

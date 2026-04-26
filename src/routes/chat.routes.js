@@ -7,6 +7,7 @@ const router = express.Router();
 router.get("/threads", requireAuth, chatController.listThreads);
 router.post("/threads/with-user/:userId", requireAuth, chatController.openThreadWithUser);
 router.get("/threads/:threadId/messages", requireAuth, chatController.listThreadMessages);
+router.get("/threads/:threadId/lock-status", requireAuth, chatController.getThreadLockStatus);
 router.post("/threads/:threadId/messages", requireAuth, chatController.sendMessage);
 router.post("/threads/:threadId/unlock-local", requireAuth, chatController.unlockThreadLocally);
 router.post("/threads/:threadId/read", requireAuth, chatController.markThreadRead);

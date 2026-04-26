@@ -72,6 +72,30 @@ async function sendMessage(req, res) {
   }
 }
 
+async function getThreadLockStatus(req, res) {
+  try {
+    const viewerId = req.auth.userId;
+    const threadId = req.params.threadId;
+    const lock = await chatService.evaluateChatLock({ threadId, senderId: viewerId });
+    return res.status(200).json({
+      success: true,
+      data: {
+        isLocked: lock.isLocked === true,
+        unlocksAt: lock.unlocksAt || null,
+        reason: lock.reason || "",
+      },
+    });
+  } catch (error) {
+    const status =
+      error.code === "THREAD_PEER_NOT_FOUND" || error.code === "THREAD_NOT_FOUND" ? 404 : 500;
+    return res.status(status).json({
+      success: false,
+      code: error.code || "CHAT_LOCK_STATUS_FAILED",
+      message: error.message || "Could not load chat lock status",
+    });
+  }
+}
+
 async function unlockThreadLocally(req, res) {
   try {
     const viewerId = req.auth.userId;
@@ -212,6 +236,7 @@ module.exports = {
   listThreads,
   listThreadMessages,
   sendMessage,
+  getThreadLockStatus,
   unlockThreadLocally,
   markThreadRead,
   setThreadMuted,
