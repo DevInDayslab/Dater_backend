@@ -1,6 +1,7 @@
 const { pool, query } = require("../config/db");
 const moderationReports = require("./moderationReports.service");
 const s3Media = require("./s3Media.service");
+const { displayNameForPrivacy } = require("../utils/displayName");
 
 const ONLINE_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
 
@@ -61,6 +62,7 @@ async function getThreadPeer(threadId, viewerId) {
   const res = await query(
     `SELECT u.id,
             u.name,
+            u.hide_my_name,
             u.gender_main,
             u.gender,
             u.is_premium,
@@ -191,6 +193,7 @@ async function listThreads(viewerId, { sort = "RECENT", search = "" } = {}) {
     `SELECT t.id AS thread_id,
             u.id AS peer_user_id,
             u.name AS peer_name,
+            u.hide_my_name AS peer_hide_my_name,
             u.last_active_at AS peer_last_active_at,
             COALESCE(s.unread_count_cache, 0)::int AS unread_count,
             (
@@ -277,7 +280,7 @@ async function listThreads(viewerId, { sort = "RECENT", search = "" } = {}) {
     res.rows.map(async (row) => ({
       threadId: row.thread_id,
       peerUserId: row.peer_user_id,
-      name: row.peer_name || "",
+      name: displayNameForPrivacy(row.peer_name, row.peer_hide_my_name === true),
       primaryPhotoUrl: await normalizePrimaryPhotoUrl(row.primary_photo_url || ""),
       lastMessage: row.last_message_text || "",
       lastMessageAt: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
@@ -690,7 +693,7 @@ async function getOrCreateDirectThread(viewerId, targetUserId) {
     throw error;
   }
   const targetRes = await query(
-    `SELECT id, name, last_active_at
+    `SELECT id, name, hide_my_name, last_active_at
      FROM users
      WHERE id = $1
        AND deleted_at IS NULL
@@ -825,7 +828,7 @@ async function getOrCreateDirectThread(viewerId, targetUserId) {
   return {
     threadId,
     peerUserId: targetId,
-    name: target.name || "",
+    name: displayNameForPrivacy(target.name, target.hide_my_name === true),
     primaryPhotoUrl: await normalizePrimaryPhotoUrl(photoRes.rows[0]?.photo_url || ""),
     hasStoryActive: sr.has_active === true,
     viewerHasUnseenStory: sr.has_unseen === true,
