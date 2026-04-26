@@ -438,7 +438,8 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
              AND ui.target_id = c.id
              AND (
                (ui.interaction_type IN ('IGNORE', 'VIEWED') AND ui.expires_at > NOW())
-               OR (ui.interaction_type IN ('REQUEST', 'COMMENT_REQUEST') AND ui.request_status = 'IGNORED')
+              OR (ui.interaction_type IN ('REQUEST', 'COMMENT_REQUEST') AND ui.request_status = 'IGNORED')
+              OR (ui.interaction_type IN ('REQUEST', 'COMMENT_REQUEST') AND ui.request_status = 'PENDING')
              )
          )
          AND NOT EXISTS (
@@ -446,8 +447,8 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
            FROM user_interactions ui
            WHERE ui.user_id = c.id
              AND ui.target_id = v.user_id
-             AND ui.interaction_type IN ('REQUEST', 'COMMENT_REQUEST')
-             AND ui.request_status = 'IGNORED'
+            AND ui.interaction_type IN ('REQUEST', 'COMMENT_REQUEST')
+            AND ui.request_status IN ('IGNORED', 'PENDING')
          )
          AND (
            CARDINALITY(v.filter_languages) = 0
