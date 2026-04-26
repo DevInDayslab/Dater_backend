@@ -17,10 +17,12 @@
  */
 require("dotenv").config();
 const path = require("path");
+const fs = require("fs");
 require("dotenv").config({ path: path.join(__dirname, "..", "..", ".env") });
 
 const { Client } = require("pg");
 const { randomUUID } = require("crypto");
+const s3Media = require("../services/s3Media.service");
 
 const SEED_PHONE_PREFIX = "988770"; // +91988770xxxxx — unlikely to collide with real users
 
@@ -102,6 +104,63 @@ function pickUnique(list, seed, count) {
     if (!out.includes(item)) out.push(item);
   }
   return out;
+}
+
+const mockPeopleImagesDir = path.join(
+  __dirname,
+  "..",
+  "..",
+  "..",
+  "DaterApp",
+  "app",
+  "src",
+  "main",
+  "res",
+  "drawable",
+  "mock-people-images"
+);
+const mockPeopleImageFiles = (() => {
+  try {
+    const files = fs
+      .readdirSync(mockPeopleImagesDir)
+      .filter((f) => /\.(jpg|jpeg|png|webp)$/i.test(f))
+      .sort();
+    return files;
+  } catch (_e) {
+    return [];
+  }
+})();
+
+function pickSeedPhotoFiles(index) {
+  if (mockPeopleImageFiles.length > 0) {
+    return [
+      mockPeopleImageFiles[index % mockPeopleImageFiles.length],
+      mockPeopleImageFiles[(index + 9) % mockPeopleImageFiles.length],
+    ];
+  }
+  return [];
+}
+
+function contentTypeForFilename(name) {
+  const lower = String(name || "").toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  return "image/jpeg";
+}
+
+async function uploadSeedPhotoToS3({ userId, filename }) {
+  const src = path.join(mockPeopleImagesDir, filename);
+  const body = fs.readFileSync(src);
+  const contentType = contentTypeForFilename(filename);
+  const ext = path.extname(filename).toLowerCase() || ".jpg";
+  const key = s3Media
+    .buildUserPhotoObjectKey(userId, s3Media.newPhotoId())
+    .replace(/\.webp$/, ext);
+  await s3Media.putObjectBytes({ key, body, contentType });
+  return {
+    photoUrl: s3Media.buildPublicObjectUrl(key),
+    s3Key: key,
+  };
 }
 
 function buildPhotoUrls(genderMain, index) {
@@ -226,8 +285,6 @@ async function upsertCompatibleCandidate(client, viewer, index, options = {}) {
   );
   const presetMessage = clip(`Let's grab coffee in ${cityForCandidateLiving.split(",")[0].trim()} and see if we click.`, 240);
 
-  const [photoOne, photoTwo] = buildPhotoUrls(genderMain, index);
-
   const userRes = await client.query(
     `INSERT INTO users (
        id, phone_country_code, phone_number, phone_e164, is_phone_verified, name,
@@ -290,6 +347,21 @@ async function upsertCompatibleCandidate(client, viewer, index, options = {}) {
   );
 
   const userId = userRes.rows[0].id;
+  let photoOne = "";
+  let photoTwo = "";
+  let photoOneS3Key = null;
+  let photoTwoS3Key = null;
+  const pickedSeedFiles = pickSeedPhotoFiles(index);
+  if (pickedSeedFiles.length >= 2) {
+    const first = await uploadSeedPhotoToS3({ userId, filename: pickedSeedFiles[0] });
+    const second = await uploadSeedPhotoToS3({ userId, filename: pickedSeedFiles[1] });
+    photoOne = first.photoUrl;
+    photoTwo = second.photoUrl;
+    photoOneS3Key = first.s3Key;
+    photoTwoS3Key = second.s3Key;
+  } else {
+    [photoOne, photoTwo] = buildPhotoUrls(genderMain, index);
+  }
 
   await client.query(
     `UPDATE users
@@ -425,9 +497,9 @@ async function upsertCompatibleCandidate(client, viewer, index, options = {}) {
 
   await client.query(`DELETE FROM user_photos WHERE user_id = $1`, [userId]);
   await client.query(
-    `INSERT INTO user_photos (user_id, photo_url, photo_order, is_primary, moderation_status)
-     VALUES ($1, $2, 1, TRUE, 'APPROVED'), ($1, $3, 2, FALSE, 'APPROVED')`,
-    [userId, photoOne, photoTwo]
+    `INSERT INTO user_photos (user_id, photo_url, photo_order, is_primary, moderation_status, s3_key)
+     VALUES ($1, $2, 1, TRUE, 'APPROVED', $4), ($1, $3, 2, FALSE, 'APPROVED', $5)`,
+    [userId, photoOne, photoTwo, photoOneS3Key, photoTwoS3Key]
   );
 
   // QA: hide-my-name across feed / friends / notifications (first-letter display for some seed users).
@@ -649,6 +721,12 @@ async function mainFeedSeed() {
             (append ? " Append mode: did not delete prior +91988770… seed users." : ""),
           requestedCandidates: candidateCount,
           seededCandidates: created.length,
+          media: {
+            source: mockPeopleImageFiles.length > 0 ? "mock-people-images->s3" : "randomuser-fallback",
+            count: mockPeopleImageFiles.length,
+            s3Bucket: s3Media.s3Bucket,
+            s3Region: s3Media.s3Region,
+          },
           profiles: created,
         },
         null,

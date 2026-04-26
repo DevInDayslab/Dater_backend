@@ -4,6 +4,7 @@ const socialService = require("./social.service");
 const { buildRelationshipState } = socialService;
 const { displayNameForPrivacy } = require("../utils/displayName");
 const { normalizeExpiredPauseForUser } = require("./accountLifecycle.service");
+const s3Media = require("./s3Media.service");
 
 const FEED_PAGE_SIZE_DEFAULT = 20;
 const FEED_PAGE_SIZE_MAX = 25;
@@ -585,27 +586,29 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
     ]
   );
 
-  const allCandidates = feedPoolRes.rows.map((row) => ({
-    userId: row.id,
-    name: displayNameForPrivacy(row.name, row.hide_my_name === true),
-    age: Number(row.age_years || 0),
-    gender: row.show_gender_on_profile === false ? "" : row.gender || "",
-    status: row.marital_status || "",
-    verified: row.is_verified === true,
-    premium: row.is_premium === true,
-    primaryPhotoUrl: row.primary_photo_url || "",
-    distanceKm: row.distance_km == null ? null : Number(Number(row.distance_km).toFixed(1)),
-    score: Number(Number(row.score || 0).toFixed(2)),
-    suggestedScore: Number(row.suggested_score || 0),
-    isNewHere: row.new_here_until != null && new Date(row.new_here_until).getTime() > Date.now(),
-    livingInCity: row.living_in_city || "",
-    relationshipState: buildRelationshipState({
-      is_friend: row.is_friend === true,
-      target_sent_pending: row.target_sent_pending === true,
-      viewer_ignored: row.viewer_ignored === true,
-      viewer_sent_pending: row.viewer_sent_pending === true,
-    }),
-  }));
+  const allCandidates = await Promise.all(
+    feedPoolRes.rows.map(async (row) => ({
+      userId: row.id,
+      name: displayNameForPrivacy(row.name, row.hide_my_name === true),
+      age: Number(row.age_years || 0),
+      gender: row.show_gender_on_profile === false ? "" : row.gender || "",
+      status: row.marital_status || "",
+      verified: row.is_verified === true,
+      premium: row.is_premium === true,
+      primaryPhotoUrl: await s3Media.presignReadIfOurS3Object(row.primary_photo_url || ""),
+      distanceKm: row.distance_km == null ? null : Number(Number(row.distance_km).toFixed(1)),
+      score: Number(Number(row.score || 0).toFixed(2)),
+      suggestedScore: Number(row.suggested_score || 0),
+      isNewHere: row.new_here_until != null && new Date(row.new_here_until).getTime() > Date.now(),
+      livingInCity: row.living_in_city || "",
+      relationshipState: buildRelationshipState({
+        is_friend: row.is_friend === true,
+        target_sent_pending: row.target_sent_pending === true,
+        viewer_ignored: row.viewer_ignored === true,
+        viewer_sent_pending: row.viewer_sent_pending === true,
+      }),
+    }))
+  );
 
   const shouldShowSuggested = allCandidates.length >= 30;
   const suggestedProfiles = shouldShowSuggested

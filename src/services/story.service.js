@@ -765,7 +765,7 @@ async function listStoryReelForViewer(viewerId) {
         verified: row.is_verified === true,
         isFriend: row.is_friend === true,
         isSelf: uid === viewerId,
-        primaryPhotoUrl: String(row.primary_photo_url || "").trim(),
+        primaryPhotoUrl: await s3Media.presignReadIfOurS3Object(String(row.primary_photo_url || "").trim()),
         viewerHasUnseenStory: false,
         stories: [],
       });

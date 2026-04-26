@@ -85,6 +85,10 @@ async function loadApprovedPhotoRowsForUser(userId) {
   );
 }
 
+async function normalizePrimaryPhotoUrl(rawUrl) {
+  return s3Media.presignReadIfOurS3Object(String(rawUrl || "").trim());
+}
+
 async function countRollingProfileViews24h(viewerId, client = null) {
   const runQuery = client?.query?.bind(client) || query;
   const res = await runQuery(
@@ -639,23 +643,26 @@ async function listIncomingFriendRequests(viewerId, { page = 1, pageSize = 30 } 
   );
   const hasMore = res.rows.length > normalizedPageSize;
   const windowRows = hasMore ? res.rows.slice(0, normalizedPageSize) : res.rows;
+  const items = await Promise.all(
+    windowRows.map(async (row) => ({
+      interactionId: row.interaction_id,
+      fromUserId: row.from_user_id,
+      interactionType: row.interaction_type,
+      commentText: row.comment_text || "",
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+      name: displayNameForPrivacy(row.name, row.hide_my_name === true),
+      age: row.age != null ? Number(row.age) : 0,
+      verified: row.verified === true,
+      primaryPhotoUrl: await normalizePrimaryPhotoUrl(row.primary_photo_url),
+      hasStoryActive: row.has_story_active === true,
+      viewerHasUnseenStory: row.story_ring_has_unseen === true,
+    }))
+  );
   return {
     page: normalizedPage,
     pageSize: normalizedPageSize,
     hasMore,
-    items: windowRows.map((row) => ({
-    interactionId: row.interaction_id,
-    fromUserId: row.from_user_id,
-    interactionType: row.interaction_type,
-    commentText: row.comment_text || "",
-    createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
-    name: displayNameForPrivacy(row.name, row.hide_my_name === true),
-    age: row.age != null ? Number(row.age) : 0,
-    verified: row.verified === true,
-    primaryPhotoUrl: row.primary_photo_url || "",
-      hasStoryActive: row.has_story_active === true,
-      viewerHasUnseenStory: row.story_ring_has_unseen === true,
-    })),
+    items,
   };
 }
 
@@ -743,21 +750,23 @@ async function listFriends(viewerId, { sort = "NEARBY" } = {}) {
      ORDER BY ${orderClause}`,
     [viewerId]
   );
-  return res.rows.map((row) => ({
-    userId: row.user_id,
-    name: displayNameForPrivacy(row.name, row.hide_my_name === true),
-    age: row.age != null ? Number(row.age) : 0,
-    verified: row.verified === true,
-    location: row.living_in_city || "",
-    distanceKm: row.distance_km != null ? Number(row.distance_km) : null,
-    friendsSince: row.friends_since ? new Date(row.friends_since).toISOString() : null,
-    primaryPhotoUrl: row.primary_photo_url || "",
-    isOnline: row.last_active_at
-      ? new Date(row.last_active_at).getTime() >= Date.now() - 20 * 60 * 1000
-      : false,
-    hasStoryActive: row.has_story_active === true,
-    viewerHasUnseenStory: row.story_ring_has_unseen === true,
-  }));
+  return Promise.all(
+    res.rows.map(async (row) => ({
+      userId: row.user_id,
+      name: displayNameForPrivacy(row.name, row.hide_my_name === true),
+      age: row.age != null ? Number(row.age) : 0,
+      verified: row.verified === true,
+      location: row.living_in_city || "",
+      distanceKm: row.distance_km != null ? Number(row.distance_km) : null,
+      friendsSince: row.friends_since ? new Date(row.friends_since).toISOString() : null,
+      primaryPhotoUrl: await normalizePrimaryPhotoUrl(row.primary_photo_url),
+      isOnline: row.last_active_at
+        ? new Date(row.last_active_at).getTime() >= Date.now() - 20 * 60 * 1000
+        : false,
+      hasStoryActive: row.has_story_active === true,
+      viewerHasUnseenStory: row.story_ring_has_unseen === true,
+    }))
+  );
 }
 
 async function resolveDirectThreadId(userA, userB) {
