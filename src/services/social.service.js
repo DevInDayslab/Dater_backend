@@ -422,16 +422,16 @@ async function ensureDirectChatThreadForPair(client, userA, userB, createdFromIn
   );
   await client.query(
     `INSERT INTO chat_restrictions (user_id, target_id, message_count, is_unlocked)
-     VALUES ($1, $2, 0, TRUE)
+     VALUES ($1, $2, 0, FALSE)
      ON CONFLICT (user_id, target_id)
-     DO UPDATE SET is_unlocked = TRUE, updated_at = NOW()`,
+     DO NOTHING`,
     [userA, userB]
   );
   await client.query(
     `INSERT INTO chat_restrictions (user_id, target_id, message_count, is_unlocked)
-     VALUES ($1, $2, 0, TRUE)
+     VALUES ($1, $2, 0, FALSE)
      ON CONFLICT (user_id, target_id)
-     DO UPDATE SET is_unlocked = TRUE, updated_at = NOW()`,
+     DO NOTHING`,
     [userB, userA]
   );
   return threadId;
