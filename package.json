@@ -8,6 +8,7 @@
     "test:photo-flow": "node src/scripts/testPhotoUploadFlow.js",
     "benchmark:profile-photo-loads": "node src/scripts/benchmarkProfilePhotoLoads.js",
     "seed:feed:ncr": "node src/scripts/seedDelhiNcrFeed.js",
+    "seed:feed:delhi-ggn-noida-rich": "node src/scripts/seedDelhiGgnNoidaRichProfiles.js",
     "seed:feed:viewer": "node src/scripts/seedFeedProfilesForViewerPhone.js",
     "inspect:feed:viewer": "node src/scripts/inspectFeedForViewerPhone.js",
     "seed:notifications:viewer": "node src/scripts/seedIncomingNotificationsForViewerPhone.js",
