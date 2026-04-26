@@ -5,6 +5,8 @@ const profileMeExtension = require("./profileMeExtension.service");
 const entitlementsService = require("./entitlements.service");
 const { displayNameForPrivacy } = require("../utils/displayName");
 
+const ONLINE_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
+
 /** Free tier: full profile opens tracked in profile_view_events; sliding window. */
 const FREE_TIER_PROFILE_VIEW_LIMIT = 20;
 const FREE_TIER_PROFILE_VIEW_WINDOW_HOURS = 24;
@@ -761,7 +763,7 @@ async function listFriends(viewerId, { sort = "NEARBY" } = {}) {
       friendsSince: row.friends_since ? new Date(row.friends_since).toISOString() : null,
       primaryPhotoUrl: await normalizePrimaryPhotoUrl(row.primary_photo_url),
       isOnline: row.last_active_at
-        ? new Date(row.last_active_at).getTime() >= Date.now() - 20 * 60 * 1000
+        ? new Date(row.last_active_at).getTime() >= Date.now() - ONLINE_ACTIVE_WINDOW_MS
         : false,
       hasStoryActive: row.has_story_active === true,
       viewerHasUnseenStory: row.story_ring_has_unseen === true,

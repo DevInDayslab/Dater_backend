@@ -2,6 +2,8 @@ const { pool, query } = require("../config/db");
 const moderationReports = require("./moderationReports.service");
 const s3Media = require("./s3Media.service");
 
+const ONLINE_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
+
 function normalizeGender(value) {
   return String(value || "")
     .trim()
@@ -246,7 +248,9 @@ async function listThreads(viewerId, { sort = "RECENT", search = "" } = {}) {
       canViewProfile: row.can_view_profile !== false,
       hasStoryActive: row.has_story_active === true,
       viewerHasUnseenStory: row.story_ring_has_unseen === true,
-      isOnline: row.peer_last_active_at ? new Date(row.peer_last_active_at).getTime() >= Date.now() - 20 * 60 * 1000 : false,
+      isOnline: row.peer_last_active_at
+        ? new Date(row.peer_last_active_at).getTime() >= Date.now() - ONLINE_ACTIVE_WINDOW_MS
+        : false,
       distanceKm: row.distance_km != null ? Number(row.distance_km) : null,
     }))
   );
@@ -764,7 +768,7 @@ async function getOrCreateDirectThread(viewerId, targetUserId) {
     hasStoryActive: sr.has_active === true,
     viewerHasUnseenStory: sr.has_unseen === true,
     isOnline: target.last_active_at
-      ? new Date(target.last_active_at).getTime() >= Date.now() - 20 * 60 * 1000
+      ? new Date(target.last_active_at).getTime() >= Date.now() - ONLINE_ACTIVE_WINDOW_MS
       : false,
     lastActiveAt: target.last_active_at ? new Date(target.last_active_at).toISOString() : null,
   };

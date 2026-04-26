@@ -1895,7 +1895,17 @@ async function deleteAccount(req, res) {
 async function pingHeartbeat(req, res) {
   try {
     const userId = req.auth.userId;
-    await query(`UPDATE users SET last_active_at = NOW(), updated_at = NOW() WHERE id = $1`, [userId]);
+    await query(
+      `UPDATE users
+       SET last_active_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1
+         AND (
+           last_active_at IS NULL
+           OR last_active_at < NOW() - INTERVAL '45 seconds'
+         )`,
+      [userId]
+    );
     return res.status(200).json({ success: true, message: "ok" });
   } catch (error) {
     return res.status(500).json({
