@@ -5,9 +5,15 @@ const s3Media = require("./s3Media.service");
 const ONLINE_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
 
 function normalizeGender(value) {
-  return String(value || "")
+  const raw = String(value || "")
     .trim()
     .toLowerCase();
+  if (raw === "male" || raw === "man" || raw === "m") return "male";
+  if (raw === "female" || raw === "woman" || raw === "f") return "female";
+  if (raw === "nonbinary" || raw === "non-binary" || raw === "non binary" || raw === "nb") {
+    return "non-binary";
+  }
+  return raw;
 }
 
 function isPremiumEffective(row) {
