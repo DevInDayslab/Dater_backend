@@ -187,12 +187,13 @@ async function listThreads(viewerId, { sort = "RECENT", search = "" } = {}) {
   let searchClause = "";
   if (q) {
     params.push(`%${q}%`);
-    searchClause = "AND (u.name ILIKE $2 OR COALESCE(last_message.message_text, '') ILIKE $2)";
+    searchClause =
+      "AND (COALESCE(u.name, CASE WHEN COALESCE(s.relationship_state::text, 'ACTIVE') = 'DELETED_ACCOUNT' THEN 'Deleted Account' ELSE '' END) ILIKE $2 OR COALESCE(last_message.message_text, '') ILIKE $2)";
   }
   const res = await query(
     `SELECT t.id AS thread_id,
-            u.id AS peer_user_id,
-            u.name AS peer_name,
+            COALESCE(u.id, other.user_id) AS peer_user_id,
+            COALESCE(u.name, CASE WHEN COALESCE(s.relationship_state::text, 'ACTIVE') = 'DELETED_ACCOUNT' THEN 'Deleted Account' ELSE '' END) AS peer_name,
             u.hide_my_name AS peer_hide_my_name,
             u.last_active_at AS peer_last_active_at,
             COALESCE(s.unread_count_cache, 0)::int AS unread_count,
@@ -247,8 +248,14 @@ async function listThreads(viewerId, { sort = "RECENT", search = "" } = {}) {
             END AS distance_km
      FROM chat_threads t
      JOIN chat_thread_participants mine ON mine.thread_id = t.id AND mine.user_id = $1
-     JOIN chat_thread_participants other ON other.thread_id = t.id AND other.user_id <> $1
-     JOIN users u ON u.id = other.user_id
+     LEFT JOIN LATERAL (
+       SELECT p.user_id
+       FROM chat_thread_participants p
+       WHERE p.thread_id = t.id
+         AND p.user_id <> $1
+       LIMIT 1
+     ) other ON true
+     LEFT JOIN users u ON u.id = other.user_id
      LEFT JOIN chat_thread_user_state s ON s.thread_id = t.id AND s.user_id = $1
      LEFT JOIN chat_user_pair_preferences pref ON pref.user_id = $1 AND pref.target_id = u.id
      LEFT JOIN LATERAL (
@@ -259,8 +266,14 @@ async function listThreads(viewerId, { sort = "RECENT", search = "" } = {}) {
        ORDER BY m.created_at DESC
        LIMIT 1
      ) AS last_message ON true
-     WHERE u.deleted_at IS NULL
-       AND u.account_state NOT IN ('DELETED', 'BANNED', 'UNDERAGE_BLOCKED')
+     WHERE (
+         COALESCE(s.relationship_state::text, 'ACTIVE') = 'DELETED_ACCOUNT'
+         OR (
+           u.id IS NOT NULL
+           AND u.deleted_at IS NULL
+           AND u.account_state NOT IN ('DELETED', 'BANNED', 'UNDERAGE_BLOCKED')
+         )
+       )
        AND EXISTS (
          SELECT 1
          FROM chat_messages em
