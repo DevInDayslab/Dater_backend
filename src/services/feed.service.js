@@ -402,6 +402,56 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
             )
            )
          )
+         AND EXISTS (
+           SELECT 1
+           FROM user_filters cdf
+           WHERE cdf.user_id = c.id
+             AND (
+               (
+                 vu.location IS NOT NULL
+                 AND c.location IS NOT NULL
+                 AND (
+                   (
+                     COALESCE(c.living_in_city_mode, 'FOLLOW_DEVICE') = 'MANUAL_SWITCH'
+                     AND NULLIF(TRIM(vu.living_in_city), '') IS NOT NULL
+                     AND NULLIF(TRIM(COALESCE(cdf.preferred_location_city, c.living_in_city)), '') IS NOT NULL
+                     AND (
+                       LOWER(TRIM(vu.living_in_city)) = LOWER(TRIM(COALESCE(cdf.preferred_location_city, c.living_in_city)))
+                       OR LOWER(TRIM(SPLIT_PART(vu.living_in_city, ',', 1))) =
+                          LOWER(TRIM(SPLIT_PART(COALESCE(cdf.preferred_location_city, c.living_in_city), ',', 1)))
+                     )
+                   )
+                   OR (
+                     COALESCE(c.living_in_city_mode, 'FOLLOW_DEVICE') <> 'MANUAL_SWITCH'
+                     AND ST_DWithin(
+                       c.location::geography,
+                       vu.location::geography,
+                       (
+                         LEAST(
+                           150,
+                           CASE
+                             WHEN COALESCE(cdf.expand_distance, FALSE)
+                               THEN ROUND(LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20))) * 1.75)
+                             ELSE LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20)))
+                           END
+                         ) * 1000
+                       )::double precision
+                     )
+                   )
+                 )
+               )
+               OR (
+                 vu.location IS NULL
+                 AND NULLIF(TRIM(c.living_in_city), '') IS NOT NULL
+                 AND NULLIF(TRIM(vu.living_in_city), '') IS NOT NULL
+                 AND (
+                   LOWER(TRIM(c.living_in_city)) = LOWER(TRIM(vu.living_in_city))
+                   OR LOWER(TRIM(SPLIT_PART(c.living_in_city, ',', 1))) =
+                      LOWER(TRIM(SPLIT_PART(vu.living_in_city, ',', 1)))
+                 )
+               )
+             )
+         )
          AND c.age_years BETWEEN v.age_min AND v.age_max
         AND (
           EXISTS (
