@@ -1826,7 +1826,8 @@ async function patchAccountSettings(req, res) {
 }
 
 /**
- * Soft-delete with retention audit row (6 months). Chat surfaces show deleted-account state via existing chat rules.
+ * Hard-delete account while preserving a 6-month retention audit row.
+ * Counterpart chat threads are marked as DELETED_ACCOUNT before user removal.
  */
 async function deleteAccount(req, res) {
   const client = await pool.connect();
@@ -1834,7 +1835,7 @@ async function deleteAccount(req, res) {
     const userId = req.auth.userId;
     await client.query("BEGIN");
     const uRes = await client.query(
-      `SELECT id, phone_e164, account_state, deleted_at
+      `SELECT id, phone_e164, account_state
        FROM users
        WHERE id = $1::uuid
        LIMIT 1
@@ -1842,7 +1843,7 @@ async function deleteAccount(req, res) {
       [userId]
     );
     const u = uRes.rows[0];
-    if (!u || u.deleted_at) {
+    if (!u) {
       await client.query("ROLLBACK");
       return res.status(404).json({ success: false, message: "User not found" });
     }
@@ -1850,22 +1851,37 @@ async function deleteAccount(req, res) {
       await client.query("ROLLBACK");
       return res.status(403).json({ success: false, message: "Account is banned" });
     }
-    const delRes = await client.query(
-      `UPDATE users
-       SET account_state = 'DELETED'::account_state_enum,
-           deleted_at = NOW(),
-           paused_until = NULL,
+    const deletedAt = new Date().toISOString();
+
+    // Mark counterpart thread state so chat surfaces show deleted-account state.
+    await client.query(
+      `UPDATE chat_thread_user_state s
+       SET relationship_state = 'DELETED_ACCOUNT'::chat_relationship_state_enum,
+           relationship_state_set_at = NOW(),
+           relationship_state_expires_at = NULL,
+           can_report = false,
+           can_view_profile = false,
+           pinned_to_bottom = true,
            updated_at = NOW()
-       WHERE id = $1::uuid
-       RETURNING deleted_at`,
+       FROM chat_thread_participants p_self
+       JOIN chat_thread_participants p_other
+         ON p_other.thread_id = p_self.thread_id
+        AND p_other.user_id <> p_self.user_id
+       WHERE p_self.user_id = $1::uuid
+         AND s.thread_id = p_other.thread_id
+         AND s.user_id = p_other.user_id`,
       [userId]
     );
-    const deletedAt = delRes.rows[0]?.deleted_at;
+
     await client.query(
       `INSERT INTO user_account_deletion_audit (user_id, phone_e164, account_deleted_at, data_retention_until)
        VALUES ($1::uuid, $2, $3::timestamptz, ($3::timestamptz + interval '6 months'))`,
       [userId, u.phone_e164 || null, deletedAt]
     );
+
+    // Hard-delete active account row; ON DELETE rules clear active app graph/state.
+    await client.query(`DELETE FROM users WHERE id = $1::uuid`, [userId]);
+
     await client.query("COMMIT");
     return res.status(200).json({
       success: true,

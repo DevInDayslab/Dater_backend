@@ -317,115 +317,6 @@ function assertAllowedUserState(user) {
   }
 }
 
-/**
- * Soft-deleted accounts may log in again within the retention window and are treated as brand-new onboarding
- * (same user row; deletion is audited separately on delete-account).
- */
-async function normalizeDeletedUserReturning(user) {
-  if (!user || String(user.account_state) !== "DELETED") return user;
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const userId = user.id;
-
-    // Fresh-account semantics on same-number relogin: clear all profile/onboarding residue.
-    const resetTables = [
-      "user_photos",
-      "user_gender_more_options",
-      "user_dating_preferences",
-      "user_looking_for",
-      "user_interests",
-      "user_languages",
-      "user_pronouns",
-      "user_written_prompts",
-      "user_filter_preferred_genders",
-      "user_filter_languages",
-      "user_filter_marital_statuses",
-      "user_filter_looking_for",
-      "user_filter_drinking_preferences",
-      "user_filter_smoking_preferences",
-      "user_filter_exercise_preferences",
-      "user_filter_religion_preferences",
-      "user_filter_education_preferences",
-      "user_filter_star_sign_preferences",
-      "user_filter_kids_preferences",
-      "user_filter_political_preferences",
-      "user_filter_pet_preferences",
-      "user_filter_ethnicity_preferences",
-      "user_filter_pronoun_preferences",
-      "premium_boosts",
-      "user_daily_profile_view_usage",
-      "profile_view_events",
-    ];
-    for (const table of resetTables) {
-      await client.query(`DELETE FROM ${table} WHERE user_id = $1::uuid`, [userId]);
-    }
-    await client.query(`DELETE FROM profile_view_events WHERE viewed_user_id = $1::uuid`, [userId]);
-    await client.query(`DELETE FROM user_filters WHERE user_id = $1::uuid`, [userId]);
-
-    const res = await client.query(
-      `UPDATE users
-       SET account_state = 'ACTIVE'::account_state_enum,
-           deleted_at = NULL,
-           paused_until = NULL,
-           hide_my_name = FALSE,
-           onboarding_step = 'onboarding_name',
-           onboarding_completed_at = NULL,
-           onboarding_updated_at = NOW(),
-           profile_completion_percentage = 0,
-           -- wipe profile core
-           name = NULL,
-           age_years = NULL,
-           date_of_birth = NULL,
-           gender = NULL,
-           gender_main = NULL,
-           show_gender_on_profile = FALSE,
-           marital_status = NULL,
-           bio = NULL,
-           preset_message = NULL,
-           height_inches = NULL,
-           drinking = NULL,
-           smoking = NULL,
-           exercise = NULL,
-           religion = NULL,
-           education = NULL,
-           star_sign = NULL,
-           kids = NULL,
-           political_leanings = NULL,
-           pets = NULL,
-           ethnicity = NULL,
-           occupation_job_title = NULL,
-           occupation_company = NULL,
-           education_institution_name = NULL,
-           education_passing_year = NULL,
-           living_in_city = NULL,
-           home_town_city = NULL,
-           living_in_city_mode = 'FOLLOW_DEVICE',
-           location = NULL,
-           location_granted = FALSE,
-           notifications_granted = FALSE,
-           updated_at = NOW()
-       WHERE id = $1::uuid
-         AND account_state = 'DELETED'::account_state_enum
-       RETURNING id, phone_e164, onboarding_completed_at, onboarding_step, onboarding_updated_at, account_state, underage_until`,
-      [userId]
-    );
-    await client.query("COMMIT");
-    const row = res.rows[0];
-    debugLog("auth_reactivated_deleted_user", { userId: user.id, fullyReset: true });
-    return row || user;
-  } catch (error) {
-    try {
-      await client.query("ROLLBACK");
-    } catch (_) {
-      /* ignore */
-    }
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
 async function normalizeUnderageState(user) {
   if (String(user.account_state) !== "UNDERAGE_BLOCKED") return user;
   if (!user.underage_until) return user;
@@ -534,7 +425,6 @@ async function completeLoginWithVerifiedPhoneE164({
     });
     let user = await normalizeUnderageState(result.user);
     user = await normalizeOnboardingWindow(user);
-    user = await normalizeDeletedUserReturning(user);
     assertAllowedUserState(user);
 
     // Underage users must not be forced into PENDING_CAPTCHA (would overwrite account_state and wrong nextRoute).
@@ -629,7 +519,6 @@ async function completeLoginWithVerifiedPhoneE164({
   });
   let user = await normalizeUnderageState(result.user);
   user = await normalizeOnboardingWindow(user);
-  user = await normalizeDeletedUserReturning(user);
   const isNewUser = result.isNewUser;
   assertAllowedUserState(user);
 
@@ -828,7 +717,6 @@ async function completeCaptchaLogin({ userId, captchaChallengeId, captchaAnswer,
   let user = refreshed.rows[0];
   user = await normalizeUnderageState(user);
   user = await normalizeOnboardingWindow(user);
-  user = await normalizeDeletedUserReturning(user);
   assertAllowedUserState(user);
 
   await logAttempt({
