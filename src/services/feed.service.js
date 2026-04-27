@@ -105,8 +105,24 @@ function resolveFeedDistanceKm(viewer) {
   return distanceKm;
 }
 
+/**
+ * Safety backfill: some completed users may have legacy/null gender_main while gender is present.
+ * Feed matching relies on gender_main for reciprocal filters, so normalize it lazily.
+ */
+async function ensureCompletedUsersGenderMainFallback() {
+  await query(
+    `UPDATE users
+     SET gender_main = gender,
+         updated_at = NOW()
+     WHERE onboarding_completed_at IS NOT NULL
+       AND gender_main IS NULL
+       AND NULLIF(TRIM(gender), '') IS NOT NULL`
+  );
+}
+
 async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, shuffleSeed } = {}) {
   const feedShuffleSeed = normalizeFeedShuffleSeed(shuffleSeed);
+  await ensureCompletedUsersGenderMainFallback();
   await normalizeExpiredPauseForUser(userId);
   const viewer = await getViewerContext(userId);
   if (!viewer) {

@@ -192,7 +192,7 @@ async function listThreads(viewerId, { sort = "RECENT", search = "" } = {}) {
   }
   const res = await query(
     `SELECT t.id AS thread_id,
-            COALESCE(u.id, other.user_id) AS peer_user_id,
+            COALESCE(u.id::text, other.user_id::text, state_other.user_id::text, '_deleted_account_') AS peer_user_id,
             COALESCE(u.name, CASE WHEN COALESCE(s.relationship_state::text, 'ACTIVE') = 'DELETED_ACCOUNT' THEN 'Deleted Account' ELSE '' END) AS peer_name,
             u.hide_my_name AS peer_hide_my_name,
             u.last_active_at AS peer_last_active_at,
@@ -255,6 +255,13 @@ async function listThreads(viewerId, { sort = "RECENT", search = "" } = {}) {
          AND p.user_id <> $1
        LIMIT 1
      ) other ON true
+     LEFT JOIN LATERAL (
+       SELECT s2.user_id
+       FROM chat_thread_user_state s2
+       WHERE s2.thread_id = t.id
+         AND s2.user_id <> $1
+       LIMIT 1
+     ) state_other ON true
      LEFT JOIN users u ON u.id = other.user_id
      LEFT JOIN chat_thread_user_state s ON s.thread_id = t.id AND s.user_id = $1
      LEFT JOIN chat_user_pair_preferences pref ON pref.user_id = $1 AND pref.target_id = u.id

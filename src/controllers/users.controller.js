@@ -1071,6 +1071,18 @@ async function updateOnboardingStep(req, res) {
       [userId, onboardingStep, Boolean(completed)]
     );
 
+    if (Boolean(completed)) {
+      await query(
+        `UPDATE users
+         SET gender_main = gender,
+             updated_at = NOW()
+         WHERE id = $1
+           AND gender_main IS NULL
+           AND NULLIF(TRIM(gender), '') IS NOT NULL`,
+        [userId]
+      );
+    }
+
     debugLog("onboarding_step_saved", {
       userId,
       onboardingStep,
