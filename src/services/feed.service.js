@@ -387,32 +387,28 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
            )
          )
          AND c.age_years BETWEEN v.age_min AND v.age_max
-         AND (
-           EXISTS (
-             SELECT 1
-             FROM user_filter_preferred_genders ufg
-             WHERE ufg.user_id = v.user_id
-               AND ufg.gender = c.gender_main
-           )
-           OR (
-             NOT EXISTS (SELECT 1 FROM user_filter_preferred_genders WHERE user_id = v.user_id)
-             AND (
-               EXISTS (
-                 SELECT 1
-                 FROM user_dating_preferences udpv
-                 WHERE udpv.user_id = v.user_id
-                   AND udpv.preferred_gender = c.gender_main
-               )
-               OR NOT EXISTS (SELECT 1 FROM user_dating_preferences WHERE user_id = v.user_id)
-             )
-           )
-         )
-         AND EXISTS (
-           SELECT 1
-           FROM user_dating_preferences udp
-           WHERE udp.user_id = c.id
-             AND udp.preferred_gender = vu.gender_main
-         )
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM user_filter_preferred_genders ufg
+            WHERE ufg.user_id = v.user_id
+              AND ufg.gender = c.gender_main
+          )
+          OR NOT EXISTS (
+            SELECT 1 FROM user_filter_preferred_genders WHERE user_id = v.user_id
+          )
+        )
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM user_filter_preferred_genders cufg
+            WHERE cufg.user_id = c.id
+              AND cufg.gender = vu.gender_main
+          )
+          OR NOT EXISTS (
+            SELECT 1 FROM user_filter_preferred_genders WHERE user_id = c.id
+          )
+        )
          AND EXISTS (
            SELECT 1
            FROM user_filters cf
