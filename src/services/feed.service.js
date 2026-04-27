@@ -1,4 +1,10 @@
 const crypto = require("crypto");
+const {
+  advMatchMaritalAnd,
+  advMatchDrinkingAnd,
+  advMatchSmokingAnd,
+  advMatchEthnicityAnd,
+} = require("../utils/advancedFilterMatchSql");
 const { query } = require("../config/db");
 const socialService = require("./social.service");
 const { buildRelationshipState } = socialService;
@@ -320,7 +326,7 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
                 OR (
                   (v.filter_min_height_inches IS NULL OR c.height_inches IS NULL OR c.height_inches >= v.filter_min_height_inches)
                   AND (v.filter_max_height_inches IS NULL OR c.height_inches IS NULL OR c.height_inches <= v.filter_max_height_inches)
-                  AND (CARDINALITY(v.filter_marital_statuses) = 0 OR (c.marital_status IS NOT NULL AND c.marital_status = ANY(v.filter_marital_statuses)))
+${advMatchMaritalAnd}
                   AND (
                     CARDINALITY(v.filter_looking_for) = 0
                     OR EXISTS (
@@ -330,8 +336,8 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
                         AND clf.looking_for_option = ANY(v.filter_looking_for)
                     )
                   )
-                  AND (CARDINALITY(v.filter_drinking) = 0 OR (c.drinking IS NOT NULL AND c.drinking = ANY(v.filter_drinking)))
-                  AND (CARDINALITY(v.filter_smoking) = 0 OR (c.smoking IS NOT NULL AND c.smoking = ANY(v.filter_smoking)))
+${advMatchDrinkingAnd}
+${advMatchSmokingAnd}
                   AND (CARDINALITY(v.filter_exercise) = 0 OR (c.exercise IS NOT NULL AND c.exercise = ANY(v.filter_exercise)))
                   AND (CARDINALITY(v.filter_religion) = 0 OR (c.religion IS NOT NULL AND c.religion = ANY(v.filter_religion)))
                   AND (CARDINALITY(v.filter_education) = 0 OR (c.education IS NOT NULL AND c.education = ANY(v.filter_education)))
@@ -339,7 +345,7 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
                   AND (CARDINALITY(v.filter_kids) = 0 OR (c.kids IS NOT NULL AND c.kids = ANY(v.filter_kids)))
                   AND (CARDINALITY(v.filter_political) = 0 OR (c.political_leanings IS NOT NULL AND c.political_leanings = ANY(v.filter_political)))
                   AND (CARDINALITY(v.filter_pets) = 0 OR (c.pets IS NOT NULL AND c.pets = ANY(v.filter_pets)))
-                  AND (CARDINALITY(v.filter_ethnicity) = 0 OR (c.ethnicity IS NOT NULL AND c.ethnicity = ANY(v.filter_ethnicity)))
+${advMatchEthnicityAnd}
                   AND (
                     CARDINALITY(v.filter_pronouns) = 0
                     OR EXISTS (
