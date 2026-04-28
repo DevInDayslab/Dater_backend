@@ -415,34 +415,22 @@ ${advMatchEthnicityAnd}
                (
                  vu.location IS NOT NULL
                  AND c.location IS NOT NULL
-                 AND (
+                 -- Reciprocal location should be distance-based when both users have coordinates.
+                 -- "Switch city" is a browsing/viewer setting and must not prevent nearby profiles
+                 -- from being mutually visible.
+                 AND ST_DWithin(
+                   c.location::geography,
+                   vu.location::geography,
                    (
-                     COALESCE(c.living_in_city_mode, 'FOLLOW_DEVICE') = 'MANUAL_SWITCH'
-                     AND NULLIF(TRIM(vu.living_in_city), '') IS NOT NULL
-                     AND NULLIF(TRIM(COALESCE(cdf.preferred_location_city, c.living_in_city)), '') IS NOT NULL
-                     AND (
-                       LOWER(TRIM(vu.living_in_city)) = LOWER(TRIM(COALESCE(cdf.preferred_location_city, c.living_in_city)))
-                       OR LOWER(TRIM(SPLIT_PART(vu.living_in_city, ',', 1))) =
-                          LOWER(TRIM(SPLIT_PART(COALESCE(cdf.preferred_location_city, c.living_in_city), ',', 1)))
-                     )
-                   )
-                   OR (
-                     COALESCE(c.living_in_city_mode, 'FOLLOW_DEVICE') <> 'MANUAL_SWITCH'
-                     AND ST_DWithin(
-                       c.location::geography,
-                       vu.location::geography,
-                       (
-                         LEAST(
-                           150,
-                           CASE
-                             WHEN COALESCE(cdf.expand_distance, FALSE)
-                               THEN ROUND(LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20))) * 1.75)
-                             ELSE LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20)))
-                           END
-                         ) * 1000
-                       )::double precision
-                     )
-                   )
+                     LEAST(
+                       150,
+                       CASE
+                         WHEN COALESCE(cdf.expand_distance, FALSE)
+                           THEN ROUND(LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20))) * 1.75)
+                         ELSE LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20)))
+                       END
+                     ) * 1000
+                   )::double precision
                  )
                )
                OR (
