@@ -497,6 +497,15 @@ ${advMatchEthnicityAnd}
               OR (ui.interaction_type IN ('REQUEST', 'COMMENT_REQUEST') AND ui.request_status = 'PENDING')
              )
          )
+        -- Mutual-ignore: if either side ignored the other (and it's still active), hide both ways.
+        AND NOT EXISTS (
+          SELECT 1
+          FROM user_interactions ui
+          WHERE ui.user_id = c.id
+            AND ui.target_id = v.user_id
+            AND ui.interaction_type = 'IGNORE'
+            AND ui.expires_at > NOW()
+        )
          AND NOT EXISTS (
            SELECT 1
            FROM user_interactions ui
