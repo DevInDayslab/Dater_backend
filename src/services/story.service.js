@@ -4,9 +4,88 @@ const chatService = require("./chat.service");
 const s3Media = require("./s3Media.service");
 const moderationReports = require("./moderationReports.service");
 const { displayNameForPrivacy } = require("../utils/displayName");
+const {
+  advMatchMaritalAnd,
+  advMatchDrinkingAnd,
+  advMatchSmokingAnd,
+  advMatchEthnicityAnd,
+} = require("../utils/advancedFilterMatchSql");
 
 function normalizedPair(a, b) {
   return a < b ? [a, b] : [b, a];
+}
+
+function clamp(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+/** Mirrors feed.service.js: default window ±5 from viewer age, hard bounds 18–80, slider min span 4; expand applies ±5. */
+function resolveFeedAgeBounds(viewer) {
+  const selfAge = Number(viewer.age_years);
+  let ageMin = Number(viewer.age_min);
+  let ageMax = Number(viewer.age_max);
+  if (!Number.isFinite(ageMin)) {
+    ageMin = Number.isFinite(selfAge) ? Math.max(18, selfAge - 5) : 20;
+  }
+  if (!Number.isFinite(ageMax)) {
+    ageMax = Number.isFinite(selfAge) ? Math.min(80, selfAge + 5) : 36;
+  }
+  ageMin = clamp(ageMin, 18, 100, 20);
+  ageMax = clamp(ageMax, 18, 100, 36);
+  if (viewer.expand_age_range === true) {
+    ageMin = Math.max(18, Math.round(ageMin - 5));
+    ageMax = Math.min(80, Math.round(ageMax + 5));
+  }
+  if (ageMax - ageMin < 4) {
+    const mid = Math.round((ageMin + ageMax) / 2);
+    ageMin = Math.max(18, mid - 2);
+    ageMax = Math.min(80, mid + 2);
+    if (ageMax - ageMin < 4) ageMax = Math.min(80, ageMin + 4);
+  }
+  if (ageMax < ageMin) {
+    const t = ageMin;
+    ageMin = ageMax;
+    ageMax = t;
+  }
+  return { ageMin, ageMax };
+}
+
+/** Mirrors feed.service.js: default 20km, 2–150; expand_distance widens radius. */
+function resolveFeedDistanceKm(viewer) {
+  let distanceKm = Number(viewer.distance_pref_km) || 20;
+  if (distanceKm < 2) distanceKm = 2;
+  if (distanceKm > 150) distanceKm = 150;
+  if (viewer.expand_distance === true) {
+    distanceKm = Math.min(150, Math.round(distanceKm * 1.75));
+  }
+  return distanceKm;
+}
+
+async function getViewerContextForStoryReel(userId) {
+  const res = await query(
+    `SELECT u.id,
+            u.age_years,
+            u.gender_main,
+            u.location,
+            u.living_in_city,
+            u.living_in_city_mode,
+            u.is_premium,
+            u.premium_expires_at,
+            uf.distance_pref_km,
+            uf.age_min,
+            uf.age_max,
+            uf.expand_age_range,
+            uf.expand_distance,
+            uf.only_verified_profiles
+     FROM users u
+     JOIN user_filters uf ON uf.user_id = u.id
+     WHERE u.id = $1::uuid
+     LIMIT 1`,
+    [userId]
+  );
+  return res.rows[0] || null;
 }
 
 async function areFriends(userIdA, userIdB) {
@@ -696,65 +775,400 @@ async function presignStoryUpload(userId) {
 
 /** Home reel: users the viewer can see with at least one active story slide. */
 async function listStoryReelForViewer(viewerId) {
+  const viewer = await getViewerContextForStoryReel(viewerId);
+  if (!viewer) return { users: [] };
+  const distanceKm = resolveFeedDistanceKm(viewer);
+  const { ageMin, ageMax } = resolveFeedAgeBounds(viewer);
+  const onlyVerified = viewer.only_verified_profiles === true;
+  const maxUsers = 60;
+
   const res = await query(
-    `SELECT s.id AS story_id,
-            s.user_id,
-            s.media_url,
-            s.media_type::text AS media_type,
-            s.created_at,
-            s.expires_at,
-            COALESCE(s.audience, 'EVERYONE') AS audience,
-            u.name,
-            u.age_years,
-            u.is_verified,
-            u.hide_my_name,
-            (
-              SELECT up.photo_url FROM user_photos up
-              WHERE up.user_id = u.id AND up.deleted_at IS NULL
-              ORDER BY up.photo_order ASC
-              LIMIT 1
-            ) AS primary_photo_url,
-            EXISTS (
-              SELECT 1 FROM friendships f
-              WHERE (f.u1_id = $1::uuid AND f.u2_id = s.user_id)
-                 OR (f.u2_id = $1::uuid AND f.u1_id = s.user_id)
-            ) AS is_friend,
-            (
-              CASE
-                WHEN s.user_id = $1::uuid THEN EXISTS (
-                  SELECT 1 FROM story_self_views sv
-                  WHERE sv.story_id = s.id AND sv.owner_user_id = $1::uuid
+    `WITH viewer AS (
+       SELECT u.id AS user_id,
+              $2::integer AS distance_km,
+              $3::smallint AS age_min,
+              $4::smallint AS age_max,
+              $5::boolean AS only_verified,
+              COALESCE((
+                SELECT array_agg(ufg.gender ORDER BY ufg.gender)
+                FROM user_filter_preferred_genders ufg
+                WHERE ufg.user_id = u.id
+              ), ARRAY[]::varchar[]) AS preferred_genders,
+              COALESCE(u.living_in_city_mode, 'FOLLOW_DEVICE') AS living_in_city_mode,
+              COALESCE(
+                uf.preferred_location_city,
+                NULLIF(TRIM(u.living_in_city), '')
+              ) AS preferred_location_city,
+              (COALESCE(u.is_premium, FALSE)
+                OR (u.premium_expires_at IS NOT NULL AND u.premium_expires_at > NOW())) AS premium_effective,
+              uf.min_height_inches AS filter_min_height_inches,
+              uf.max_height_inches AS filter_max_height_inches,
+              COALESCE(uf.show_other_people_if_run_out, TRUE) AS show_other_people_if_run_out,
+              COALESCE((
+                SELECT array_agg(language ORDER BY language)
+                FROM user_filter_languages WHERE user_id = u.id
+              ), ARRAY[]::varchar[]) AS filter_languages,
+              COALESCE((
+                SELECT array_agg(marital_status ORDER BY marital_status)
+                FROM user_filter_marital_statuses WHERE user_id = u.id
+              ), ARRAY[]::varchar[]) AS filter_marital_statuses,
+              COALESCE((
+                SELECT array_agg(looking_for_option ORDER BY looking_for_option)
+                FROM user_filter_looking_for WHERE user_id = u.id
+              ), ARRAY[]::varchar[]) AS filter_looking_for,
+              COALESCE((
+                SELECT array_agg(drinking_option ORDER BY drinking_option)
+                FROM user_filter_drinking_preferences WHERE user_id = u.id
+              ), ARRAY[]::varchar[]) AS filter_drinking,
+              COALESCE((
+                SELECT array_agg(smoking_option ORDER BY smoking_option)
+                FROM user_filter_smoking_preferences WHERE user_id = u.id
+              ), ARRAY[]::varchar[]) AS filter_smoking,
+              COALESCE((
+                SELECT array_agg(exercise_option ORDER BY exercise_option)
+                FROM user_filter_exercise_preferences WHERE user_id = u.id
+              ), ARRAY[]::varchar[]) AS filter_exercise,
+              COALESCE((
+                SELECT array_agg(religion_option ORDER BY religion_option)
+                FROM user_filter_religion_preferences WHERE user_id = u.id
+              ), ARRAY[]::varchar[]) AS filter_religion,
+              COALESCE((
+                SELECT array_agg(education_option ORDER BY education_option)
+                FROM user_filter_education_preferences WHERE user_id = u.id
+              ), ARRAY[]::varchar[]) AS filter_education,
+              COALESCE((
+                SELECT array_agg(star_sign_option ORDER BY star_sign_option)
+                FROM user_filter_star_sign_preferences WHERE user_id = u.id
+              ), ARRAY[]::varchar[]) AS filter_star_sign,
+              COALESCE((
+                SELECT array_agg(kids_option ORDER BY kids_option)
+                FROM user_filter_kids_preferences WHERE user_id = u.id
+              ), ARRAY[]::varchar[]) AS filter_kids,
+              COALESCE((
+                SELECT array_agg(political_option ORDER BY political_option)
+                FROM user_filter_political_preferences WHERE user_id = u.id
+              ), ARRAY[]::varchar[]) AS filter_political,
+              COALESCE((
+                SELECT array_agg(pet_option ORDER BY pet_option)
+                FROM user_filter_pet_preferences WHERE user_id = u.id
+              ), ARRAY[]::varchar[]) AS filter_pets,
+              COALESCE((
+                SELECT array_agg(ethnicity_option ORDER BY ethnicity_option)
+                FROM user_filter_ethnicity_preferences WHERE user_id = u.id
+              ), ARRAY[]::varchar[]) AS filter_ethnicity,
+              COALESCE((
+                SELECT array_agg(pronoun_option ORDER BY pronoun_option)
+                FROM user_filter_pronoun_preferences WHERE user_id = u.id
+              ), ARRAY[]::varchar[]) AS filter_pronouns,
+              (
+                uf.min_height_inches IS NOT NULL
+                OR uf.max_height_inches IS NOT NULL
+                OR EXISTS (SELECT 1 FROM user_filter_marital_statuses WHERE user_id = u.id LIMIT 1)
+                OR EXISTS (SELECT 1 FROM user_filter_looking_for WHERE user_id = u.id LIMIT 1)
+                OR EXISTS (SELECT 1 FROM user_filter_drinking_preferences WHERE user_id = u.id LIMIT 1)
+                OR EXISTS (SELECT 1 FROM user_filter_smoking_preferences WHERE user_id = u.id LIMIT 1)
+                OR EXISTS (SELECT 1 FROM user_filter_exercise_preferences WHERE user_id = u.id LIMIT 1)
+                OR EXISTS (SELECT 1 FROM user_filter_religion_preferences WHERE user_id = u.id LIMIT 1)
+                OR EXISTS (SELECT 1 FROM user_filter_education_preferences WHERE user_id = u.id LIMIT 1)
+                OR EXISTS (SELECT 1 FROM user_filter_star_sign_preferences WHERE user_id = u.id LIMIT 1)
+                OR EXISTS (SELECT 1 FROM user_filter_kids_preferences WHERE user_id = u.id LIMIT 1)
+                OR EXISTS (SELECT 1 FROM user_filter_political_preferences WHERE user_id = u.id LIMIT 1)
+                OR EXISTS (SELECT 1 FROM user_filter_pet_preferences WHERE user_id = u.id LIMIT 1)
+                OR EXISTS (SELECT 1 FROM user_filter_ethnicity_preferences WHERE user_id = u.id LIMIT 1)
+                OR EXISTS (SELECT 1 FROM user_filter_pronoun_preferences WHERE user_id = u.id LIMIT 1)
+              ) AS filter_advanced_active
+       FROM users u
+       JOIN user_filters uf ON uf.user_id = u.id
+       WHERE u.id = $1::uuid
+     ),
+     eligible_candidate_staging AS (
+       SELECT c.id,
+              (
+                NOT v.premium_effective
+                OR (
+                  (v.filter_min_height_inches IS NULL OR c.height_inches IS NULL OR c.height_inches >= v.filter_min_height_inches)
+                  AND (v.filter_max_height_inches IS NULL OR c.height_inches IS NULL OR c.height_inches <= v.filter_max_height_inches)
+${advMatchMaritalAnd}
+                  AND (
+                    CARDINALITY(v.filter_looking_for) = 0
+                    OR EXISTS (
+                      SELECT 1
+                      FROM user_looking_for clf
+                      WHERE clf.user_id = c.id
+                        AND clf.looking_for_option = ANY(v.filter_looking_for)
+                    )
+                  )
+${advMatchDrinkingAnd}
+${advMatchSmokingAnd}
+                  AND (CARDINALITY(v.filter_exercise) = 0 OR (c.exercise IS NOT NULL AND c.exercise = ANY(v.filter_exercise)))
+                  AND (CARDINALITY(v.filter_religion) = 0 OR (c.religion IS NOT NULL AND c.religion = ANY(v.filter_religion)))
+                  AND (CARDINALITY(v.filter_education) = 0 OR (c.education IS NOT NULL AND c.education = ANY(v.filter_education)))
+                  AND (CARDINALITY(v.filter_star_sign) = 0 OR (c.star_sign IS NOT NULL AND c.star_sign = ANY(v.filter_star_sign)))
+                  AND (CARDINALITY(v.filter_kids) = 0 OR (c.kids IS NOT NULL AND c.kids = ANY(v.filter_kids)))
+                  AND (CARDINALITY(v.filter_political) = 0 OR (c.political_leanings IS NOT NULL AND c.political_leanings = ANY(v.filter_political)))
+                  AND (CARDINALITY(v.filter_pets) = 0 OR (c.pets IS NOT NULL AND c.pets = ANY(v.filter_pets)))
+${advMatchEthnicityAnd}
+                  AND (
+                    CARDINALITY(v.filter_pronouns) = 0
+                    OR EXISTS (
+                      SELECT 1
+                      FROM user_pronouns cp
+                      WHERE cp.user_id = c.id
+                        AND cp.pronoun = ANY(v.filter_pronouns)
+                    )
+                  )
                 )
-                ELSE EXISTS (
-                  SELECT 1 FROM story_interactions si
-                  WHERE si.story_id = s.id
-                    AND si.actor_user_id = $1::uuid
-                    AND si.interaction_type = 'VIEW'
+              ) AS adv_match
+       FROM users c
+       JOIN users vu ON vu.id = $1::uuid
+       CROSS JOIN viewer v
+       WHERE c.id <> v.user_id
+         AND c.deleted_at IS NULL
+         AND c.account_state = 'ACTIVE'
+         AND (v.only_verified = FALSE OR c.is_verified = TRUE)
+         AND (
+           (
+             vu.location IS NOT NULL
+             AND c.location IS NOT NULL
+             AND (
+              (
+                v.living_in_city_mode = 'MANUAL_SWITCH'
+                AND NULLIF(TRIM(c.living_in_city), '') IS NOT NULL
+                AND NULLIF(TRIM(v.preferred_location_city), '') IS NOT NULL
+                AND (
+                  LOWER(TRIM(c.living_in_city)) = LOWER(TRIM(v.preferred_location_city))
+                  OR LOWER(TRIM(SPLIT_PART(c.living_in_city, ',', 1))) =
+                     LOWER(TRIM(SPLIT_PART(v.preferred_location_city, ',', 1)))
                 )
-              END
-            ) AS viewed_by_viewer
-     FROM stories s
-     JOIN users u ON u.id = s.user_id
-     WHERE s.deleted_at IS NULL
-       AND s.expires_at > NOW()
-       AND u.deleted_at IS NULL
-       AND u.account_state NOT IN ('DELETED', 'BANNED', 'UNDERAGE_BLOCKED')
-       AND NOT EXISTS (
-         SELECT 1 FROM blocks b
-         WHERE (b.blocker_id = $1::uuid AND b.blocked_id = s.user_id)
-            OR (b.blocker_id = s.user_id AND b.blocked_id = $1::uuid)
-       )
-       AND (
-         s.user_id = $1::uuid
-         OR EXISTS (
-           SELECT 1 FROM friendships f
-           WHERE (f.u1_id = $1::uuid AND f.u2_id = s.user_id)
-              OR (f.u2_id = $1::uuid AND f.u1_id = s.user_id)
+              )
+               OR (
+                 v.living_in_city_mode <> 'MANUAL_SWITCH'
+                 AND ST_DWithin(
+                   c.location::geography,
+                   vu.location::geography,
+                   (v.distance_km * 1000)::double precision
+                 )
+               )
+             )
+           )
+           OR (
+             vu.location IS NULL
+             AND NULLIF(TRIM(vu.living_in_city), '') IS NOT NULL
+             AND NULLIF(TRIM(c.living_in_city), '') IS NOT NULL
+            AND (
+              LOWER(TRIM(vu.living_in_city)) = LOWER(TRIM(c.living_in_city))
+              OR LOWER(TRIM(SPLIT_PART(vu.living_in_city, ',', 1))) =
+                 LOWER(TRIM(SPLIT_PART(c.living_in_city, ',', 1)))
+            )
+           )
          )
-         OR COALESCE(s.audience, 'EVERYONE') = 'EVERYONE'
-       )
-     ORDER BY s.user_id, s.created_at ASC`,
-    [viewerId]
+         AND EXISTS (
+           SELECT 1
+           FROM user_filters cdf
+           WHERE cdf.user_id = c.id
+             AND (
+               (
+                 vu.location IS NOT NULL
+                 AND c.location IS NOT NULL
+                 AND (
+                   (
+                     COALESCE(c.living_in_city_mode, 'FOLLOW_DEVICE') = 'MANUAL_SWITCH'
+                     AND NULLIF(TRIM(vu.living_in_city), '') IS NOT NULL
+                     AND NULLIF(TRIM(COALESCE(cdf.preferred_location_city, c.living_in_city)), '') IS NOT NULL
+                     AND (
+                       LOWER(TRIM(vu.living_in_city)) = LOWER(TRIM(COALESCE(cdf.preferred_location_city, c.living_in_city)))
+                       OR LOWER(TRIM(SPLIT_PART(vu.living_in_city, ',', 1))) =
+                          LOWER(TRIM(SPLIT_PART(COALESCE(cdf.preferred_location_city, c.living_in_city), ',', 1)))
+                     )
+                   )
+                   OR (
+                     COALESCE(c.living_in_city_mode, 'FOLLOW_DEVICE') <> 'MANUAL_SWITCH'
+                     AND ST_DWithin(
+                       c.location::geography,
+                       vu.location::geography,
+                       (
+                         LEAST(
+                           150,
+                           CASE
+                             WHEN COALESCE(cdf.expand_distance, FALSE)
+                               THEN ROUND(LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20))) * 1.75)
+                             ELSE LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20)))
+                           END
+                         ) * 1000
+                       )::double precision
+                     )
+                   )
+                 )
+               )
+               OR (
+                 vu.location IS NULL
+                 AND NULLIF(TRIM(c.living_in_city), '') IS NOT NULL
+                 AND NULLIF(TRIM(vu.living_in_city), '') IS NOT NULL
+                 AND (
+                   LOWER(TRIM(c.living_in_city)) = LOWER(TRIM(vu.living_in_city))
+                   OR LOWER(TRIM(SPLIT_PART(c.living_in_city, ',', 1))) =
+                      LOWER(TRIM(SPLIT_PART(vu.living_in_city, ',', 1)))
+                 )
+               )
+             )
+         )
+         AND c.age_years BETWEEN v.age_min AND v.age_max
+         AND (
+           EXISTS (
+             SELECT 1
+             FROM user_filter_preferred_genders ufg
+             WHERE ufg.user_id = v.user_id
+               AND ufg.gender = c.gender_main
+           )
+           OR NOT EXISTS (
+             SELECT 1 FROM user_filter_preferred_genders WHERE user_id = v.user_id
+           )
+         )
+         AND (
+           EXISTS (
+             SELECT 1
+             FROM user_filter_preferred_genders cufg
+             WHERE cufg.user_id = c.id
+               AND cufg.gender = vu.gender_main
+           )
+           OR NOT EXISTS (
+             SELECT 1 FROM user_filter_preferred_genders WHERE user_id = c.id
+           )
+         )
+         AND EXISTS (
+           SELECT 1
+           FROM user_filters cf
+           WHERE cf.user_id = c.id
+             AND vu.age_years BETWEEN cf.age_min AND cf.age_max
+         )
+         AND NOT EXISTS (
+           SELECT 1
+           FROM friendships f
+           WHERE (f.u1_id = v.user_id AND f.u2_id = c.id)
+              OR (f.u1_id = c.id AND f.u2_id = v.user_id)
+         )
+         AND NOT EXISTS (
+           SELECT 1
+           FROM blocks b
+           WHERE (b.blocker_id = v.user_id AND b.blocked_id = c.id)
+              OR (b.blocker_id = c.id AND b.blocked_id = v.user_id)
+         )
+         AND NOT EXISTS (
+           SELECT 1
+           FROM user_interactions ui
+           WHERE ui.user_id = v.user_id
+             AND ui.target_id = c.id
+             AND (
+               (ui.interaction_type IN ('IGNORE', 'VIEWED') AND ui.expires_at > NOW())
+               OR (ui.interaction_type IN ('REQUEST', 'COMMENT_REQUEST') AND ui.request_status = 'IGNORED')
+               OR (ui.interaction_type IN ('REQUEST', 'COMMENT_REQUEST') AND ui.request_status = 'PENDING')
+             )
+         )
+         AND NOT EXISTS (
+           SELECT 1
+           FROM user_interactions ui
+           WHERE ui.user_id = c.id
+             AND ui.target_id = v.user_id
+             AND ui.interaction_type IN ('REQUEST', 'COMMENT_REQUEST')
+             AND ui.request_status IN ('IGNORED', 'PENDING')
+         )
+         AND (
+           CARDINALITY(v.filter_languages) = 0
+           OR EXISTS (
+             SELECT 1
+             FROM user_languages cl
+             WHERE cl.user_id = c.id
+               AND cl.language = ANY(v.filter_languages)
+           )
+         )
+     ),
+     eligible_candidates AS (
+       SELECT id FROM eligible_candidate_staging WHERE adv_match
+       UNION ALL
+       SELECT ecs.id
+       FROM eligible_candidate_staging ecs
+       CROSS JOIN viewer v
+       WHERE NOT ecs.adv_match
+         AND v.premium_effective
+         AND v.show_other_people_if_run_out
+         AND v.filter_advanced_active
+     ),
+     story_rows AS (
+       SELECT s.id AS story_id,
+              s.user_id,
+              s.media_url,
+              s.media_type::text AS media_type,
+              s.created_at,
+              s.expires_at,
+              COALESCE(s.audience, 'EVERYONE') AS audience,
+              u.name,
+              u.age_years,
+              u.is_verified,
+              u.hide_my_name,
+              (
+                SELECT up.photo_url FROM user_photos up
+                WHERE up.user_id = u.id AND up.deleted_at IS NULL
+                ORDER BY up.photo_order ASC
+                LIMIT 1
+              ) AS primary_photo_url,
+              EXISTS (
+                SELECT 1 FROM friendships f
+                WHERE (f.u1_id = $1::uuid AND f.u2_id = s.user_id)
+                   OR (f.u2_id = $1::uuid AND f.u1_id = s.user_id)
+              ) AS is_friend,
+              (
+                CASE
+                  WHEN s.user_id = $1::uuid THEN EXISTS (
+                    SELECT 1 FROM story_self_views sv
+                    WHERE sv.story_id = s.id AND sv.owner_user_id = $1::uuid
+                  )
+                  ELSE EXISTS (
+                    SELECT 1 FROM story_interactions si
+                    WHERE si.story_id = s.id
+                      AND si.actor_user_id = $1::uuid
+                      AND si.interaction_type = 'VIEW'
+                  )
+                END
+              ) AS viewed_by_viewer
+       FROM stories s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.deleted_at IS NULL
+         AND s.expires_at > NOW()
+         AND u.deleted_at IS NULL
+         AND u.account_state NOT IN ('DELETED', 'BANNED', 'UNDERAGE_BLOCKED')
+         AND NOT EXISTS (
+           SELECT 1 FROM blocks b
+           WHERE (b.blocker_id = $1::uuid AND b.blocked_id = s.user_id)
+              OR (b.blocker_id = s.user_id AND b.blocked_id = $1::uuid)
+         )
+         AND (
+           s.user_id = $1::uuid
+           OR EXISTS (
+             SELECT 1 FROM friendships f
+             WHERE (f.u1_id = $1::uuid AND f.u2_id = s.user_id)
+                OR (f.u2_id = $1::uuid AND f.u1_id = s.user_id)
+           )
+           OR (
+             COALESCE(s.audience, 'EVERYONE') = 'EVERYONE'
+             AND EXISTS (SELECT 1 FROM eligible_candidates ec WHERE ec.id = s.user_id)
+           )
+         )
+     ),
+     eligible_owner_ids AS (
+       SELECT user_id,
+              BOOL_OR(NOT viewed_by_viewer) AS viewer_has_unseen_story,
+              BOOL_OR(is_friend) AS is_friend,
+              (user_id = $1::uuid) AS is_self
+       FROM story_rows
+       GROUP BY user_id
+       ORDER BY is_self DESC, viewer_has_unseen_story DESC, user_id
+       LIMIT $6::int
+     )
+     SELECT sr.*
+     FROM story_rows sr
+     JOIN eligible_owner_ids eo ON eo.user_id = sr.user_id
+     ORDER BY sr.user_id, sr.created_at ASC`,
+    [viewerId, distanceKm, ageMin, ageMax, onlyVerified, maxUsers]
   );
 
   const byUser = new Map();
