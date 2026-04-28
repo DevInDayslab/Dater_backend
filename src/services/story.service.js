@@ -70,7 +70,6 @@ async function getViewerContextForStoryReel(userId) {
             u.gender_main,
             u.location,
             u.living_in_city,
-            u.living_in_city_mode,
             u.is_premium,
             u.premium_expires_at,
             uf.distance_pref_km,
@@ -78,7 +77,8 @@ async function getViewerContextForStoryReel(userId) {
             uf.age_max,
             uf.expand_age_range,
             uf.expand_distance,
-            uf.only_verified_profiles
+            uf.only_verified_profiles,
+            uf.preferred_location_city
      FROM users u
      JOIN user_filters uf ON uf.user_id = u.id
      WHERE u.id = $1::uuid
@@ -794,11 +794,11 @@ async function listStoryReelForViewer(viewerId) {
                 FROM user_filter_preferred_genders ufg
                 WHERE ufg.user_id = u.id
               ), ARRAY[]::varchar[]) AS preferred_genders,
-              COALESCE(u.living_in_city_mode, 'FOLLOW_DEVICE') AS living_in_city_mode,
               COALESCE(
                 uf.preferred_location_city,
                 NULLIF(TRIM(u.living_in_city), '')
               ) AS preferred_location_city,
+              (uf.preferred_location_city IS NOT NULL AND NULLIF(TRIM(uf.preferred_location_city), '') IS NOT NULL) AS using_switch_city,
               (COALESCE(u.is_premium, FALSE)
                 OR (u.premium_expires_at IS NOT NULL AND u.premium_expires_at > NOW())) AS premium_effective,
               uf.min_height_inches AS filter_min_height_inches,
@@ -932,7 +932,7 @@ ${advMatchEthnicityAnd}
              AND c.location IS NOT NULL
              AND (
               (
-                v.living_in_city_mode = 'MANUAL_SWITCH'
+                v.using_switch_city = TRUE
                 AND NULLIF(TRIM(c.living_in_city), '') IS NOT NULL
                 AND NULLIF(TRIM(v.preferred_location_city), '') IS NOT NULL
                 AND (
@@ -942,7 +942,7 @@ ${advMatchEthnicityAnd}
                 )
               )
                OR (
-                 v.living_in_city_mode <> 'MANUAL_SWITCH'
+                 v.using_switch_city = FALSE
                  AND ST_DWithin(
                    c.location::geography,
                    vu.location::geography,

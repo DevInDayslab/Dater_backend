@@ -242,7 +242,8 @@ async function loadUserFiltersSnapshot(userId, runQuery = query) {
     loadStringRows(runQuery, `SELECT pronoun_option FROM user_filter_pronoun_preferences WHERE user_id = $1 ORDER BY pronoun_option ASC`, [userId], "pronoun_option"),
   ]);
 
-  const usingSwitchCity = String(scalar.living_in_city_mode || "FOLLOW_DEVICE") === "MANUAL_SWITCH";
+  const preferredLocationCity = String(scalar.preferred_location_city || "").trim();
+  const usingSwitchCity = preferredLocationCity.length > 0;
   return {
     preferredGenders,
     distanceKm: Number(scalar.distance_pref_km || 20),
@@ -251,9 +252,7 @@ async function loadUserFiltersSnapshot(userId, runQuery = query) {
     expandAgeRange: Boolean(scalar.expand_age_range),
     expandDistance: Boolean(scalar.expand_distance),
     onlyVerifiedProfiles: Boolean(scalar.only_verified_profiles),
-    selectedLocation: usingSwitchCity
-      ? String(scalar.living_in_city || scalar.preferred_location_city || "").trim()
-      : "__CURRENT_LOCATION__",
+    selectedLocation: usingSwitchCity ? preferredLocationCity : "__CURRENT_LOCATION__",
     usingSwitchCity,
     minHeightInches: scalar.min_height_inches == null ? null : Number(scalar.min_height_inches),
     maxHeightInches: scalar.max_height_inches == null ? null : Number(scalar.max_height_inches),
@@ -731,26 +730,8 @@ async function updateMyFilters(req, res) {
       );
     }
 
-    if (selectedLocationPresent) {
-      if (useCurrentLocation) {
-        await client.query(
-          `UPDATE users
-           SET living_in_city_mode = 'FOLLOW_DEVICE',
-               updated_at = NOW()
-           WHERE id = $1`,
-          [userId]
-        );
-      } else {
-        await client.query(
-          `UPDATE users
-           SET living_in_city = $2,
-               living_in_city_mode = 'MANUAL_SWITCH',
-               updated_at = NOW()
-           WHERE id = $1`,
-          [userId, selectedLocationRaw]
-        );
-      }
-    }
+    // IMPORTANT: "Switch city" is a *filter/browsing* setting only.
+    // Do NOT mutate profile fields like users.living_in_city / users.living_in_city_mode here.
 
     const rowReplacements = [
       [preferredGendersPatch, "user_filter_preferred_genders", "gender"],
