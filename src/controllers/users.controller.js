@@ -172,8 +172,16 @@ async function clearAdvancedFilterPreferencesFromDb(client, userId) {
 }
 
 async function ensureUserFiltersRow(client, userId) {
+  // Seed defaults ONCE for brand-new accounts:
+  // age range = (user age ± 5), with min clamped to 18.
+  // If the row already exists (user has opened/saved filters before), do nothing.
   await client.query(
-    `INSERT INTO user_filters (user_id) VALUES ($1)
+    `INSERT INTO user_filters (user_id, age_min, age_max)
+     SELECT $1,
+            GREATEST(18, COALESCE(u.age_years, 20) - 5) AS age_min,
+            (COALESCE(u.age_years, 20) + 5) AS age_max
+     FROM users u
+     WHERE u.id = $1
      ON CONFLICT (user_id) DO NOTHING`,
     [userId]
   );
@@ -198,6 +206,7 @@ async function loadUserFiltersSnapshot(userId, runQuery = query) {
             uf.show_other_people_if_run_out,
             u.living_in_city,
             u.living_in_city_mode,
+            u.age_years,
             u.is_verified
      FROM user_filters uf
      JOIN users u ON u.id = uf.user_id
@@ -244,11 +253,21 @@ async function loadUserFiltersSnapshot(userId, runQuery = query) {
 
   const preferredLocationCity = String(scalar.preferred_location_city || "").trim();
   const usingSwitchCity = preferredLocationCity.length > 0;
+  const viewerAge = Number(scalar.age_years || 0);
+  const seededAgeMin =
+    Number.isFinite(viewerAge) && viewerAge > 0 ? Math.max(18, viewerAge - 5) : 20;
+  const seededAgeMax =
+    Number.isFinite(viewerAge) && viewerAge > 0 ? viewerAge + 5 : 36;
+  const persistedAgeMin = Number(scalar.age_min || 0);
+  const persistedAgeMax = Number(scalar.age_max || 0);
+  const useSeededAgeRange =
+    !(Number.isFinite(persistedAgeMin) && persistedAgeMin > 0) &&
+    !(Number.isFinite(persistedAgeMax) && persistedAgeMax > 0);
   return {
     preferredGenders,
     distanceKm: Number(scalar.distance_pref_km || 20),
-    ageMin: Number(scalar.age_min || 20),
-    ageMax: Number(scalar.age_max || 36),
+    ageMin: useSeededAgeRange ? seededAgeMin : Number(scalar.age_min || 20),
+    ageMax: useSeededAgeRange ? seededAgeMax : Number(scalar.age_max || 36),
     expandAgeRange: Boolean(scalar.expand_age_range),
     expandDistance: Boolean(scalar.expand_distance),
     onlyVerifiedProfiles: Boolean(scalar.only_verified_profiles),
