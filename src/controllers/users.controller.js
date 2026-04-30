@@ -730,18 +730,10 @@ async function updateMyFilters(req, res) {
       );
     }
 
-    // Keep `living_in_city_mode` in sync with "Switch city" selection:
-    // - Current location => FOLLOW_DEVICE
-    // - Manually selected city => MANUAL_SWITCH (premium-only, already gated above)
-    if (selectedLocationPresent) {
-      await client.query(
-        `UPDATE users
-         SET living_in_city_mode = $2,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [userId, useCurrentLocation ? "FOLLOW_DEVICE" : "MANUAL_SWITCH"]
-      );
-    }
+    // NOTE:
+    // Filter "Switch city" is a browse-only preference stored in user_filters.preferred_location_city.
+    // It must NOT mutate profile fields such as users.living_in_city / users.living_in_city_mode,
+    // because those drive the "Lives in" bubble and edit-profile values.
 
     const rowReplacements = [
       [preferredGendersPatch, "user_filter_preferred_genders", "gender"],
