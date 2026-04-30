@@ -174,7 +174,7 @@ async function clearAdvancedFilterPreferencesFromDb(client, userId) {
 async function ensureUserFiltersRow(client, userId) {
   // Seed defaults ONCE for brand-new accounts:
   // age range = (user age ± 5), with min clamped to 18.
-  // If the row already exists (user has opened/saved filters before), do nothing.
+  // If the row already exists (user has opened/saved filters before), do not override.
   await client.query(
     `INSERT INTO user_filters (user_id, age_min, age_max)
      SELECT $1,
@@ -183,6 +183,22 @@ async function ensureUserFiltersRow(client, userId) {
      FROM users u
      WHERE u.id = $1
      ON CONFLICT (user_id) DO NOTHING`,
+    [userId]
+  );
+
+  // If onboarding created the user_filters row earlier with legacy defaults (20–36),
+  // upgrade it to the new default range, but ONLY when the user hasn't edited filters yet.
+  await client.query(
+    `UPDATE user_filters uf
+     SET age_min = GREATEST(18, COALESCE(u.age_years, 20) - 5),
+         age_max = (COALESCE(u.age_years, 20) + 5),
+         updated_at = NOW()
+     FROM users u
+     WHERE uf.user_id = $1
+       AND u.id = uf.user_id
+       AND uf.updated_at = uf.created_at
+       AND uf.age_min = 20
+       AND uf.age_max = 36`,
     [userId]
   );
 }
@@ -1447,11 +1463,7 @@ async function updateOnboardingData(req, res) {
         values: finalDatingPrefs,
       });
 
-      await client.query(
-        `INSERT INTO user_filters (user_id) VALUES ($1)
-         ON CONFLICT (user_id) DO NOTHING`,
-        [userId]
-      );
+      await ensureUserFiltersRow(client, userId);
       await replaceUserRows(client, {
         table: "user_filter_preferred_genders",
         column: "gender",
