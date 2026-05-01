@@ -11,6 +11,7 @@
     "seed:feed:delhi-ggn-noida-rich": "node src/scripts/seedDelhiGgnNoidaRichProfiles.js",
     "seed:feed:viewer": "node src/scripts/seedFeedProfilesForViewerPhone.js",
     "inspect:feed:viewer": "node src/scripts/inspectFeedForViewerPhone.js",
+    "inspect:notifications:viewer": "node src/scripts/checkNotificationPrefsForPhone.js",
     "seed:notifications:viewer": "node src/scripts/seedIncomingNotificationsForViewerPhone.js",
     "clear:social:for-phones": "node src/scripts/clearSocialGraphForPhones.js",
     "seed:friends:active:viewer": "node src/scripts/seedActiveFriendsForViewerPhone.js",

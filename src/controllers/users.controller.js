@@ -2040,14 +2040,14 @@ async function patchNotificationPreferences(req, res) {
             NOW()
         )
        ON CONFLICT (user_id) DO UPDATE SET
-            push_friend_request_received = COALESCE(EXCLUDED.push_friend_request_received, user_notification_preferences.push_friend_request_received),
-            push_friend_request_accepted = COALESCE(EXCLUDED.push_friend_request_accepted, user_notification_preferences.push_friend_request_accepted),
-            push_chat_dm = COALESCE(EXCLUDED.push_chat_dm, user_notification_preferences.push_chat_dm),
-            push_comment = COALESCE(EXCLUDED.push_comment, user_notification_preferences.push_comment),
-            inapp_friend_request_received = COALESCE(EXCLUDED.inapp_friend_request_received, user_notification_preferences.inapp_friend_request_received),
-            inapp_friend_request_accepted = COALESCE(EXCLUDED.inapp_friend_request_accepted, user_notification_preferences.inapp_friend_request_accepted),
-            inapp_chat_dm = COALESCE(EXCLUDED.inapp_chat_dm, user_notification_preferences.inapp_chat_dm),
-            inapp_comment = COALESCE(EXCLUDED.inapp_comment, user_notification_preferences.inapp_comment),
+            push_friend_request_received = COALESCE($2::boolean, user_notification_preferences.push_friend_request_received),
+            push_friend_request_accepted = COALESCE($3::boolean, user_notification_preferences.push_friend_request_accepted),
+            push_chat_dm = COALESCE($4::boolean, user_notification_preferences.push_chat_dm),
+            push_comment = COALESCE($5::boolean, user_notification_preferences.push_comment),
+            inapp_friend_request_received = COALESCE($6::boolean, user_notification_preferences.inapp_friend_request_received),
+            inapp_friend_request_accepted = COALESCE($7::boolean, user_notification_preferences.inapp_friend_request_accepted),
+            inapp_chat_dm = COALESCE($8::boolean, user_notification_preferences.inapp_chat_dm),
+            inapp_comment = COALESCE($9::boolean, user_notification_preferences.inapp_comment),
             updated_at = NOW()
        RETURNING push_friend_request_received,
                  push_friend_request_accepted,
