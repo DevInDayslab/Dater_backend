@@ -1957,10 +1957,166 @@ async function pingHeartbeat(req, res) {
   }
 }
 
+async function getNotificationPreferences(req, res) {
+  try {
+    const userId = req.auth.userId;
+    const prefRes = await query(
+      `SELECT push_friend_request_received,
+              push_friend_request_accepted,
+              push_chat_dm,
+              push_comment,
+              inapp_friend_request_received,
+              inapp_friend_request_accepted,
+              inapp_chat_dm,
+              inapp_comment
+       FROM user_notification_preferences
+       WHERE user_id = $1::uuid
+       LIMIT 1`,
+      [userId]
+    );
+    const row = prefRes.rows[0];
+    return res.status(200).json({
+      success: true,
+      message: "ok",
+      data: {
+        pushFriendRequestReceived: row ? row.push_friend_request_received : true,
+        pushFriendRequestAccepted: row ? row.push_friend_request_accepted : true,
+        pushChatDm: row ? row.push_chat_dm : true,
+        pushComment: row ? row.push_comment : true,
+        inAppFriendRequestReceived: row ? row.inapp_friend_request_received : true,
+        inAppFriendRequestAccepted: row ? row.inapp_friend_request_accepted : true,
+        inAppChatDm: row ? row.inapp_chat_dm : true,
+        inAppComment: row ? row.inapp_comment : true,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to load notification preferences",
+    });
+  }
+}
+
+async function patchNotificationPreferences(req, res) {
+  try {
+    const userId = req.auth.userId;
+    const body = req.body || {};
+    const toBool = (v) => (typeof v === "boolean" ? v : null);
+
+    const patch = {
+      push_friend_request_received: toBool(body.pushFriendRequestReceived),
+      push_friend_request_accepted: toBool(body.pushFriendRequestAccepted),
+      push_chat_dm: toBool(body.pushChatDm),
+      push_comment: toBool(body.pushComment),
+      inapp_friend_request_received: toBool(body.inAppFriendRequestReceived),
+      inapp_friend_request_accepted: toBool(body.inAppFriendRequestAccepted),
+      inapp_chat_dm: toBool(body.inAppChatDm),
+      inapp_comment: toBool(body.inAppComment),
+    };
+
+    await query(
+      `INSERT INTO user_notification_preferences (
+            user_id,
+            push_friend_request_received,
+            push_friend_request_accepted,
+            push_chat_dm,
+            push_comment,
+            inapp_friend_request_received,
+            inapp_friend_request_accepted,
+            inapp_chat_dm,
+            inapp_comment,
+            updated_at
+        )
+       VALUES (
+            $1::uuid,
+            COALESCE($2::boolean, TRUE),
+            COALESCE($3::boolean, TRUE),
+            COALESCE($4::boolean, TRUE),
+            COALESCE($5::boolean, TRUE),
+            COALESCE($6::boolean, TRUE),
+            COALESCE($7::boolean, TRUE),
+            COALESCE($8::boolean, TRUE),
+            COALESCE($9::boolean, TRUE),
+            NOW()
+        )
+       ON CONFLICT (user_id) DO UPDATE SET
+            push_friend_request_received = COALESCE(EXCLUDED.push_friend_request_received, user_notification_preferences.push_friend_request_received),
+            push_friend_request_accepted = COALESCE(EXCLUDED.push_friend_request_accepted, user_notification_preferences.push_friend_request_accepted),
+            push_chat_dm = COALESCE(EXCLUDED.push_chat_dm, user_notification_preferences.push_chat_dm),
+            push_comment = COALESCE(EXCLUDED.push_comment, user_notification_preferences.push_comment),
+            inapp_friend_request_received = COALESCE(EXCLUDED.inapp_friend_request_received, user_notification_preferences.inapp_friend_request_received),
+            inapp_friend_request_accepted = COALESCE(EXCLUDED.inapp_friend_request_accepted, user_notification_preferences.inapp_friend_request_accepted),
+            inapp_chat_dm = COALESCE(EXCLUDED.inapp_chat_dm, user_notification_preferences.inapp_chat_dm),
+            inapp_comment = COALESCE(EXCLUDED.inapp_comment, user_notification_preferences.inapp_comment),
+            updated_at = NOW()
+       RETURNING push_friend_request_received,
+                 push_friend_request_accepted,
+                 push_chat_dm,
+                 push_comment,
+                 inapp_friend_request_received,
+                 inapp_friend_request_accepted,
+                 inapp_chat_dm,
+                 inapp_comment`,
+      [
+        userId,
+        patch.push_friend_request_received,
+        patch.push_friend_request_accepted,
+        patch.push_chat_dm,
+        patch.push_comment,
+        patch.inapp_friend_request_received,
+        patch.inapp_friend_request_accepted,
+        patch.inapp_chat_dm,
+        patch.inapp_comment,
+      ]
+    );
+
+    // Re-read (single source of truth).
+    return getNotificationPreferences(req, res);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to update notification preferences",
+    });
+  }
+}
+
+async function registerPushToken(req, res) {
+  try {
+    const userId = req.auth.userId;
+    const token = String(req.body?.token || "").trim();
+    if (!token) {
+      return res.status(400).json({ success: false, message: "Missing token" });
+    }
+    const platform = String(req.body?.platform || "ANDROID").trim().toUpperCase() || "ANDROID";
+    const deviceId = String(req.body?.deviceId || "").trim();
+
+    await query(
+      `INSERT INTO user_push_tokens (user_id, token, platform, device_id, is_active, last_seen_at)
+       VALUES ($1::uuid, $2, $3, $4, TRUE, NOW())
+       ON CONFLICT (user_id, token) DO UPDATE SET
+         platform = EXCLUDED.platform,
+         device_id = EXCLUDED.device_id,
+         is_active = TRUE,
+         last_seen_at = NOW()`,
+      [userId, token, platform, deviceId]
+    );
+
+    return res.status(200).json({ success: true, message: "ok" });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to register push token",
+    });
+  }
+}
+
 module.exports = {
   getMe,
   ackModerationWarning,
   patchAccountSettings,
+  getNotificationPreferences,
+  patchNotificationPreferences,
+  registerPushToken,
   deleteAccount,
   getMyFilters,
   getPublicProfile,
