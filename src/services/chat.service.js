@@ -2,6 +2,7 @@ const { pool, query } = require("../config/db");
 const moderationReports = require("./moderationReports.service");
 const s3Media = require("./s3Media.service");
 const { displayNameForPrivacy } = require("../utils/displayName");
+const { sendEventDataNotification } = require("./pushNotification.service");
 
 const ONLINE_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
 
@@ -509,6 +510,8 @@ async function sendMessage(viewerId, threadId, text, replyToMessageId = "") {
     throw error;
   }
   const client = await pool.connect();
+  let peerUserId = "";
+  let senderName = "New message";
   try {
     await client.query("BEGIN");
     const okRes = await client.query(
@@ -577,6 +580,23 @@ async function sendMessage(viewerId, threadId, text, replyToMessageId = "") {
       [threadId, viewerId, body, safeReplyId]
     );
     const message = insertRes.rows[0];
+    const peerRes = await client.query(
+      `SELECT p.user_id AS peer_user_id
+       FROM chat_thread_participants p
+       WHERE p.thread_id = $1
+         AND p.user_id <> $2
+       LIMIT 1`,
+      [threadId, viewerId]
+    );
+    peerUserId = String(peerRes.rows[0]?.peer_user_id || "").trim();
+    const senderRes = await client.query(
+      `SELECT name, hide_my_name
+       FROM users
+       WHERE id = $1
+       LIMIT 1`,
+      [viewerId]
+    );
+    senderName = displayNameForPrivacy(senderRes.rows[0]?.name || "New message", senderRes.rows[0]?.hide_my_name === true);
     await client.query(`UPDATE chat_threads SET last_message_at = NOW() WHERE id = $1`, [threadId]);
     await client.query(
     `UPDATE chat_thread_user_state
@@ -601,6 +621,17 @@ async function sendMessage(viewerId, threadId, text, replyToMessageId = "") {
       [threadId, viewerId]
     );
     await client.query("COMMIT");
+    if (peerUserId) {
+      sendEventDataNotification({
+        recipientUserId: peerUserId,
+        actorUserId: viewerId,
+        eventType: "CHAT_DM",
+        title: senderName,
+        body: body,
+        chatId: threadId,
+        extraData: { senderId: viewerId },
+      }).catch(() => {});
+    }
     return {
       id: message.id,
       createdAt: message.created_at ? new Date(message.created_at).toISOString() : null,

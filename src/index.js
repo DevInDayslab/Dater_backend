@@ -5,6 +5,7 @@ const app = require("./app");
 const { connectDb } = require("./config/db");
 const { initWebsocket } = require("./services/websocket.service");
 const photoMaintenance = require("./services/photoMaintenance.service");
+const { initFirebaseAdmin } = require("./services/firebaseAdmin.service");
 
 const PORT = process.env.PORT || 3000;
 
@@ -26,6 +27,7 @@ async function startServer() {
   try {
     await connectDb();
     console.log("Database Connected");
+    initFirebaseAdmin();
 
     scheduleStoryMediaPurge();
 

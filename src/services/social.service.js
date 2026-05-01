@@ -4,6 +4,7 @@ const s3Media = require("./s3Media.service");
 const profileMeExtension = require("./profileMeExtension.service");
 const entitlementsService = require("./entitlements.service");
 const { displayNameForPrivacy } = require("../utils/displayName");
+const { sendEventDataNotification } = require("./pushNotification.service");
 
 const ONLINE_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
 
@@ -439,6 +440,7 @@ async function ensureDirectChatThreadForPair(client, userA, userB, createdFromIn
 
 async function sendFriendRequest(viewerId, targetUserId) {
   const client = await pool.connect();
+  let senderName = "Someone";
   try {
     await client.query("BEGIN");
     await assertEligibleFriendRequestPair(client, viewerId, targetUserId);
@@ -467,7 +469,23 @@ async function sendFriendRequest(viewerId, targetUserId) {
        VALUES ($1, $2, 'REQUEST_SENT', FALSE)`,
       [targetUserId, viewerId]
     );
+    const senderRes = await client.query(
+      `SELECT name, hide_my_name
+       FROM users
+       WHERE id = $1
+       LIMIT 1`,
+      [viewerId]
+    );
+    senderName = displayNameForPrivacy(senderRes.rows[0]?.name || "Someone", senderRes.rows[0]?.hide_my_name === true);
     await client.query("COMMIT");
+    sendEventDataNotification({
+      recipientUserId: targetUserId,
+      actorUserId: viewerId,
+      eventType: "FRIEND_REQUEST_RECEIVED",
+      title: "New Friend Request!",
+      body: `${senderName} wants to connect.`,
+      extraData: { senderId: viewerId },
+    }).catch(() => {});
     return getPublicProfile(viewerId, targetUserId, { consumeView: false });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -488,6 +506,7 @@ async function sendCommentRequest(viewerId, targetUserId, rawMessage) {
     throw error;
   }
   const client = await pool.connect();
+  let senderName = "Someone";
   try {
     await client.query("BEGIN");
     await assertEligibleFriendRequestPair(client, viewerId, targetUserId);
@@ -517,7 +536,23 @@ async function sendCommentRequest(viewerId, targetUserId, rawMessage) {
        VALUES ($1, $2, 'REQUEST_COMMENT_SENT', FALSE)`,
       [targetUserId, viewerId]
     );
+    const senderRes = await client.query(
+      `SELECT name, hide_my_name
+       FROM users
+       WHERE id = $1
+       LIMIT 1`,
+      [viewerId]
+    );
+    senderName = displayNameForPrivacy(senderRes.rows[0]?.name || "Someone", senderRes.rows[0]?.hide_my_name === true);
     await client.query("COMMIT");
+    sendEventDataNotification({
+      recipientUserId: targetUserId,
+      actorUserId: viewerId,
+      eventType: "COMMENT",
+      title: "New Comment",
+      body: `${senderName} sent you a comment.`,
+      extraData: { senderId: viewerId },
+    }).catch(() => {});
     return getPublicProfile(viewerId, targetUserId, { consumeView: false });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -915,6 +950,7 @@ async function respondToRequest(viewerId, fromUserId, decision) {
     throw error;
   }
   const client = await pool.connect();
+  let accepterName = "Someone";
   try {
     await client.query("BEGIN");
     const requestRes = await client.query(
@@ -995,8 +1031,26 @@ async function respondToRequest(viewerId, fromUserId, decision) {
          VALUES ($1, $2, 'REQUEST_ACCEPTED', FALSE)`,
         [fromUserId, viewerId]
       );
+      const accepterRes = await client.query(
+        `SELECT name, hide_my_name
+         FROM users
+         WHERE id = $1
+         LIMIT 1`,
+        [viewerId]
+      );
+      accepterName = displayNameForPrivacy(accepterRes.rows[0]?.name || "Someone", accepterRes.rows[0]?.hide_my_name === true);
     }
     await client.query("COMMIT");
+    if (normalizedDecision === "ACCEPTED") {
+      sendEventDataNotification({
+        recipientUserId: fromUserId,
+        actorUserId: viewerId,
+        eventType: "FRIEND_REQUEST_ACCEPTED",
+        title: "Request Accepted",
+        body: `${accepterName} accepted your friend request.`,
+        extraData: { friendId: viewerId },
+      }).catch(() => {});
+    }
     return getPublicProfile(viewerId, fromUserId, { consumeView: false });
   } catch (error) {
     await client.query("ROLLBACK");
