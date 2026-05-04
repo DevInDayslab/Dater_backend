@@ -498,7 +498,7 @@ ${advMatchEthnicityAnd}
                  AND NULLIF(TRIM(cdf.preferred_location_city), '') IS NOT NULL
                  AND (
                    LOWER(TRIM(v.preferred_location_city)) = LOWER(TRIM(cdf.preferred_location_city))
-                   OR LOWER(TRIM(SPLIT_PART(v.preferred_location_city), ',', 1))) =
+                   OR LOWER(TRIM(SPLIT_PART(v.preferred_location_city, ',', 1))) =
                       LOWER(TRIM(SPLIT_PART(cdf.preferred_location_city, ',', 1)))
                  )
                )
