@@ -370,32 +370,8 @@ async function getMe(req, res) {
       });
     }
 
-    if (!user.is_premium && user.living_in_city_mode === "MANUAL_SWITCH") {
-      const lat = Number(user.location_latitude);
-      const lng = Number(user.location_longitude);
-      const cityState =
-        Number.isFinite(lat) && Number.isFinite(lng)
-          ? geocoderService.getCityAndState(lat, lng)
-          : null;
-      const fallbackCity = cityState?.cityStateLabel || user.living_in_city || null;
-      const downgraded = await query(
-        `UPDATE users
-         SET living_in_city_mode = 'FOLLOW_DEVICE',
-             living_in_city = COALESCE($2, living_in_city),
-             updated_at = NOW()
-         WHERE id = $1
-         RETURNING living_in_city, living_in_city_mode`,
-        [userId, fallbackCity]
-      );
-      user.living_in_city = downgraded.rows[0]?.living_in_city || user.living_in_city;
-      user.living_in_city_mode =
-        downgraded.rows[0]?.living_in_city_mode || "FOLLOW_DEVICE";
-      debugLog("living_in_city_mode_downgraded_to_follow_device", {
-        userId,
-        reason: "premium_expired",
-        fallbackCity: user.living_in_city,
-      });
-    }
+    // Profile "Living in" manual selection uses MANUAL_SWITCH so GPS pings do not overwrite the label.
+    // Premium-only browse city remains gated via user_filters.preferred_location_city (updateMyFilters).
 
     await photoMaintenance.expireStalePendingPhotosForUser(userId);
     await photoMaintenance.normalizePhotoOrdersForUser(userId);
@@ -1155,7 +1131,7 @@ async function updateProfileCore(req, res) {
     const hasCoordinates =
       Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude));
     const currentUserRes = await query(
-      `SELECT living_in_city_mode, is_premium, premium_started_at, premium_expires_at
+      `SELECT living_in_city_mode
        FROM users
        WHERE id = $1
        LIMIT 1`,
@@ -1168,19 +1144,6 @@ async function updateProfileCore(req, res) {
       });
     }
     const currentLivingInCityMode = currentUserRes.rows[0].living_in_city_mode || "FOLLOW_DEVICE";
-    const premiumStartMs = currentUserRes.rows[0].premium_started_at
-      ? new Date(currentUserRes.rows[0].premium_started_at).getTime()
-      : null;
-    const premiumExpiryMs = currentUserRes.rows[0].premium_expires_at
-      ? new Date(currentUserRes.rows[0].premium_expires_at).getTime()
-      : null;
-    const nowMs = Date.now();
-    const hasActivePremiumWindow =
-      Number.isFinite(premiumStartMs) &&
-      Number.isFinite(premiumExpiryMs) &&
-      premiumStartMs <= nowMs &&
-      nowMs < premiumExpiryMs;
-    const isPremiumUser = currentUserRes.rows[0].is_premium === true || hasActivePremiumWindow;
     const requestedLivingInCityMode = hasOwn(body, "livingInCityMode")
       ? normalizeLivingInCityMode(livingInCityMode)
       : null;
@@ -1188,13 +1151,6 @@ async function updateProfileCore(req, res) {
       return res.status(400).json({
         success: false,
         message: "livingInCityMode must be FOLLOW_DEVICE or MANUAL_SWITCH",
-      });
-    }
-    if (requestedLivingInCityMode === "MANUAL_SWITCH" && !isPremiumUser) {
-      return res.status(403).json({
-        success: false,
-        code: "PREMIUM_REQUIRED",
-        message: "Manual city switch requires an active premium window",
       });
     }
     const effectiveLivingInCityMode = requestedLivingInCityMode || currentLivingInCityMode;
