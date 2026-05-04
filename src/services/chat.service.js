@@ -1,7 +1,7 @@
 const { pool, query } = require("../config/db");
 const moderationReports = require("./moderationReports.service");
 const s3Media = require("./s3Media.service");
-const { displayNameForPrivacy } = require("../utils/displayName");
+const { displayNameForPrivacy, formatNotificationPersonTitle } = require("../utils/displayName");
 const { sendEventDataNotification } = require("./pushNotification.service");
 
 const ONLINE_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
@@ -511,7 +511,6 @@ async function sendMessage(viewerId, threadId, text, replyToMessageId = "") {
   }
   const client = await pool.connect();
   let peerUserId = "";
-  let senderName = "New message";
   try {
     await client.query("BEGIN");
     const okRes = await client.query(
@@ -590,13 +589,14 @@ async function sendMessage(viewerId, threadId, text, replyToMessageId = "") {
     );
     peerUserId = String(peerRes.rows[0]?.peer_user_id || "").trim();
     const senderRes = await client.query(
-      `SELECT name, hide_my_name
+      `SELECT name, hide_my_name, age_years
        FROM users
        WHERE id = $1
        LIMIT 1`,
       [viewerId]
     );
-    senderName = displayNameForPrivacy(senderRes.rows[0]?.name || "New message", senderRes.rows[0]?.hide_my_name === true);
+    const sRow = senderRes.rows[0];
+    const pushTitle = formatNotificationPersonTitle(sRow?.name, sRow?.hide_my_name === true, sRow?.age_years);
     await client.query(`UPDATE chat_threads SET last_message_at = NOW() WHERE id = $1`, [threadId]);
     await client.query(
     `UPDATE chat_thread_user_state
@@ -626,7 +626,7 @@ async function sendMessage(viewerId, threadId, text, replyToMessageId = "") {
         recipientUserId: peerUserId,
         actorUserId: viewerId,
         eventType: "CHAT_DM",
-        title: senderName,
+        title: pushTitle,
         body: body,
         chatId: threadId,
         extraData: { senderId: viewerId },
@@ -672,12 +672,8 @@ async function unlockThreadLocally(viewerId, threadId) {
   return { success: true };
 }
 
-/**
- * Sum of per-thread unread counters for inbox-visible threads (matches listThreads visibility rules).
- */
-async function sumUnreadMessages(viewerId) {
-  const res = await query(
-    `SELECT COALESCE(SUM(COALESCE(s.unread_count_cache, 0)), 0)::bigint AS total
+/** Inbox visibility + thread state filter (matches [listThreads] / unread logic). */
+const CHAT_INBOX_VISIBILITY_WHERE = `
      FROM chat_threads t
      JOIN chat_thread_participants mine ON mine.thread_id = t.id AND mine.user_id = $1::uuid
      LEFT JOIN LATERAL (
@@ -706,10 +702,36 @@ async function sumUnreadMessages(viewerId) {
        AND (
          COALESCE(s.relationship_state::text, 'ACTIVE') <> 'CHAT_ENDED'
          OR COALESCE(s.relationship_state_set_at, NOW()) >= NOW() - INTERVAL '3 days'
-       )`,
+       )`;
+
+/**
+ * Sum of per-thread unread counters for inbox-visible threads (matches listThreads visibility rules).
+ */
+async function sumUnreadMessages(viewerId) {
+  const res = await query(
+    `SELECT COALESCE(SUM(COALESCE(s.unread_count_cache, 0)), 0)::bigint AS total
+     ${CHAT_INBOX_VISIBILITY_WHERE}`,
     [viewerId]
   );
   return Number(res.rows[0]?.total || 0);
+}
+
+/**
+ * Distinct inbox threads where the peer messaged last and the viewer has not sent a reply after that
+ * (same predicate as UNANSWERED sort). Used for bottom-nav chat badge — one count per person, not per message.
+ */
+async function countThreadsAwaitingViewerReply(viewerId) {
+  const res = await query(
+    `SELECT COUNT(*)::bigint AS c
+     ${CHAT_INBOX_VISIBILITY_WHERE}
+       AND s.last_inbound_message_at IS NOT NULL
+       AND (
+         s.last_outbound_message_at IS NULL
+         OR s.last_outbound_message_at < s.last_inbound_message_at
+       )`,
+    [viewerId]
+  );
+  return Number(res.rows[0]?.c || 0);
 }
 
 async function markThreadRead(viewerId, threadId) {
@@ -933,6 +955,7 @@ async function getOrCreateDirectThread(viewerId, targetUserId) {
 module.exports = {
   listThreads,
   sumUnreadMessages,
+  countThreadsAwaitingViewerReply,
   listThreadMessages,
   sendMessage,
   evaluateChatLock,

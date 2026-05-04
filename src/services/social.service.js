@@ -3,7 +3,7 @@ const moderationReports = require("./moderationReports.service");
 const s3Media = require("./s3Media.service");
 const profileMeExtension = require("./profileMeExtension.service");
 const entitlementsService = require("./entitlements.service");
-const { displayNameForPrivacy } = require("../utils/displayName");
+const { displayNameForPrivacy, formatNotificationPersonTitle } = require("../utils/displayName");
 const { sendEventDataNotification } = require("./pushNotification.service");
 
 const ONLINE_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
@@ -476,11 +476,7 @@ async function sendFriendRequest(viewerId, targetUserId) {
       [viewerId]
     );
     const sRow = senderRes.rows[0];
-    const senderDisplay = displayNameForPrivacy(sRow?.name || "Someone", sRow?.hide_my_name === true);
-    const senderAge =
-      sRow?.age_years != null && Number.isFinite(Number(sRow.age_years)) ? Number(sRow.age_years) : 0;
-    const pushTitle =
-      senderAge > 0 ? `${senderDisplay}, ${Math.round(senderAge)}` : senderDisplay;
+    const pushTitle = formatNotificationPersonTitle(sRow?.name, sRow?.hide_my_name === true, sRow?.age_years);
     await client.query("COMMIT");
     sendEventDataNotification({
       recipientUserId: targetUserId,
@@ -547,11 +543,7 @@ async function sendCommentRequest(viewerId, targetUserId, rawMessage) {
       [viewerId]
     );
     const sRow = senderRes.rows[0];
-    const senderDisplay = displayNameForPrivacy(sRow?.name || "Someone", sRow?.hide_my_name === true);
-    const senderAge =
-      sRow?.age_years != null && Number.isFinite(Number(sRow.age_years)) ? Number(sRow.age_years) : 0;
-    const pushTitle =
-      senderAge > 0 ? `${senderDisplay}, ${Math.round(senderAge)}` : senderDisplay;
+    const pushTitle = formatNotificationPersonTitle(sRow?.name, sRow?.hide_my_name === true, sRow?.age_years);
     await client.query("COMMIT");
     sendEventDataNotification({
       recipientUserId: targetUserId,
@@ -1084,11 +1076,8 @@ async function respondToRequest(viewerId, fromUserId, decision) {
         [viewerId]
       );
       const aRow = accepterRes.rows[0];
-      accepterName = displayNameForPrivacy(aRow?.name || "Someone", aRow?.hide_my_name === true);
-      const accepterAge =
-        aRow?.age_years != null && Number.isFinite(Number(aRow.age_years)) ? Number(aRow.age_years) : 0;
-      pushAcceptTitle =
-        accepterAge > 0 ? `${accepterName}, ${Math.round(accepterAge)}` : accepterName;
+      pushAcceptTitle = formatNotificationPersonTitle(aRow?.name, aRow?.hide_my_name === true, aRow?.age_years);
+      accepterName = pushAcceptTitle;
     }
     await client.query("COMMIT");
     if (normalizedDecision === "ACCEPTED") {
