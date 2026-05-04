@@ -3,6 +3,7 @@ const { query } = require("../config/db");
 const { authenticateAccessToken } = require("../middleware/auth.middleware");
 const chatService = require("./chat.service");
 const s3Media = require("./s3Media.service");
+const unreadCountsService = require("./unreadCounts.service");
 let ioRef = null;
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -68,6 +69,17 @@ async function getThreadParticipantIds(threadId) {
   return pRes.rows.map((r) => String(r.user_id || "").trim()).filter(Boolean);
 }
 
+async function emitUnreadCountsUpdated(userId) {
+  const uid = String(userId || "").trim();
+  if (!ioRef || !uid) return;
+  try {
+    const payload = await unreadCountsService.getUnreadCounts(uid);
+    ioRef.to(`user:${uid}`).emit("unread_counts_updated", payload);
+  } catch (e) {
+    console.warn("[ws] unread_counts_updated failed", e && e.message ? e.message : e);
+  }
+}
+
 async function emitThreadMessageToParticipants(threadId, messageId) {
   if (!ioRef) return false;
   const tid = String(threadId || "").trim();
@@ -78,6 +90,9 @@ async function emitThreadMessageToParticipants(threadId, messageId) {
     const msg = await loadMessagePayloadForUser(uid, tid, mid);
     if (!msg) continue;
     ioRef.to(`user:${uid}`).emit("receive_message", msg);
+  }
+  for (const uid of participants) {
+    emitUnreadCountsUpdated(uid).catch(() => {});
   }
   return true;
 }
@@ -111,6 +126,7 @@ function initWebsocket(server) {
     socket.join(`user:${viewerId}`);
     console.log(`✅ Socket joined room: user:${viewerId} socketId=${socket.id}`);
     console.log(`New socket connected, userId: ${viewerId}`);
+    emitUnreadCountsUpdated(viewerId).catch(() => {});
 
     socket.on("send_message", async (payload = {}, ack) => {
       const done = typeof ack === "function" ? ack : () => {};
@@ -183,5 +199,6 @@ function initWebsocket(server) {
 module.exports = {
   initWebsocket,
   emitThreadMessageToParticipants,
+  emitUnreadCountsUpdated,
 };
 

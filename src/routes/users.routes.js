@@ -5,6 +5,7 @@ const { requireAuth } = require("../middleware/auth.middleware");
 
 const router = express.Router();
 
+router.get("/me/unread-counts", requireAuth, usersController.getUnreadCounts);
 router.get("/me", requireAuth, usersController.getMe);
 router.post("/me/moderation-warning-ack", requireAuth, usersController.ackModerationWarning);
 router.patch("/me/account-settings", requireAuth, usersController.patchAccountSettings);

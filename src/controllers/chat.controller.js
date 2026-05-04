@@ -1,5 +1,5 @@
 const chatService = require("../services/chat.service");
-const { emitThreadMessageToParticipants } = require("../services/websocket.service");
+const { emitThreadMessageToParticipants, emitUnreadCountsUpdated } = require("../services/websocket.service");
 
 async function listThreads(req, res) {
   try {
@@ -117,6 +117,7 @@ async function markThreadRead(req, res) {
     const viewerId = req.auth.userId;
     const threadId = req.params.threadId;
     await chatService.markThreadRead(viewerId, threadId);
+    emitUnreadCountsUpdated(viewerId).catch(() => {});
     return res.status(200).json({ success: true });
   } catch (error) {
     const status = error.code === "THREAD_NOT_FOUND" ? 404 : 500;
@@ -149,6 +150,7 @@ async function deleteThreadFromInbox(req, res) {
     const viewerId = req.auth.userId;
     const threadId = req.params.threadId;
     await chatService.deleteThreadFromInbox(viewerId, threadId);
+    emitUnreadCountsUpdated(viewerId).catch(() => {});
     return res.status(200).json({ success: true, message: "Thread deleted" });
   } catch (error) {
     const status = error.code === "THREAD_NOT_FOUND" ? 404 : 500;

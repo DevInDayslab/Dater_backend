@@ -9,6 +9,8 @@ const entitlementsService = require("../services/entitlements.service");
 const verificationService = require("../services/verification.service");
 const socialService = require("../services/social.service");
 const accountLifecycle = require("../services/accountLifecycle.service");
+const { emitUnreadCountsUpdated } = require("../services/websocket.service");
+const unreadCountsService = require("../services/unreadCounts.service");
 
 function normalizeStringArray(value) {
   if (!Array.isArray(value)) return null;
@@ -835,6 +837,8 @@ async function sendFriendRequest(req, res) {
     const viewerId = req.auth.userId;
     const { targetUserId } = req.body || {};
     const profile = await socialService.sendFriendRequest(viewerId, targetUserId);
+    const targetId = String(targetUserId || "").trim();
+    if (targetId) emitUnreadCountsUpdated(targetId).catch(() => {});
     return res.status(200).json({
       success: true,
       message: "Friend request sent",
@@ -862,6 +866,8 @@ async function sendCommentRequest(req, res) {
     const viewerId = req.auth.userId;
     const { targetUserId, message } = req.body || {};
     const profile = await socialService.sendCommentRequest(viewerId, targetUserId, message);
+    const targetId = String(targetUserId || "").trim();
+    if (targetId) emitUnreadCountsUpdated(targetId).catch(() => {});
     return res.status(200).json({
       success: true,
       message: "Comment request sent",
@@ -893,6 +899,7 @@ async function ignoreProfile(req, res) {
     const viewerId = req.auth.userId;
     const { targetUserId } = req.body || {};
     await socialService.ignoreProfile(viewerId, targetUserId);
+    emitUnreadCountsUpdated(viewerId).catch(() => {});
     return res.status(200).json({
       success: true,
       message: "Profile ignored",
@@ -926,6 +933,20 @@ async function listIncomingFriendRequests(req, res) {
   }
 }
 
+async function getUnreadCounts(req, res) {
+  try {
+    const viewerId = req.auth.userId;
+    const data = await unreadCountsService.getUnreadCounts(viewerId);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      code: error.code || "UNREAD_COUNTS_FAILED",
+      message: error.message || "Failed to load unread counts",
+    });
+  }
+}
+
 async function listFriends(req, res) {
   try {
     const viewerId = req.auth.userId;
@@ -950,6 +971,7 @@ async function undoIncomingFriendRequestIgnore(req, res) {
     const viewerId = req.auth.userId;
     const fromUserId = req.params.fromUserId;
     await socialService.undoIncomingFriendRequestIgnore(viewerId, fromUserId);
+    emitUnreadCountsUpdated(viewerId).catch(() => {});
     return res.status(200).json({
       success: true,
       message: "Request restored",
@@ -970,6 +992,8 @@ async function respondToRequest(req, res) {
     const fromUserId = req.params.fromUserId;
     const { decision } = req.body || {};
     const profile = await socialService.respondToRequest(viewerId, fromUserId, decision);
+    emitUnreadCountsUpdated(viewerId).catch(() => {});
+    emitUnreadCountsUpdated(fromUserId).catch(() => {});
     return res.status(200).json({
       success: true,
       message: "Request updated",
@@ -2081,6 +2105,7 @@ module.exports = {
   sendCommentRequest,
   ignoreProfile,
   listIncomingFriendRequests,
+  getUnreadCounts,
   listFriends,
   unfriendUser,
   blockUser,

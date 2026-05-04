@@ -672,6 +672,46 @@ async function unlockThreadLocally(viewerId, threadId) {
   return { success: true };
 }
 
+/**
+ * Sum of per-thread unread counters for inbox-visible threads (matches listThreads visibility rules).
+ */
+async function sumUnreadMessages(viewerId) {
+  const res = await query(
+    `SELECT COALESCE(SUM(COALESCE(s.unread_count_cache, 0)), 0)::bigint AS total
+     FROM chat_threads t
+     JOIN chat_thread_participants mine ON mine.thread_id = t.id AND mine.user_id = $1::uuid
+     LEFT JOIN LATERAL (
+       SELECT p.user_id
+       FROM chat_thread_participants p
+       WHERE p.thread_id = t.id AND p.user_id <> $1::uuid
+       LIMIT 1
+     ) other ON true
+     LEFT JOIN users u ON u.id = other.user_id
+     LEFT JOIN chat_thread_user_state s ON s.thread_id = t.id AND s.user_id = $1::uuid
+     WHERE (
+         COALESCE(s.relationship_state::text, 'ACTIVE') = 'DELETED_ACCOUNT'
+         OR (
+           u.id IS NOT NULL
+           AND u.deleted_at IS NULL
+           AND u.account_state NOT IN ('DELETED', 'BANNED', 'UNDERAGE_BLOCKED')
+         )
+       )
+       AND EXISTS (
+         SELECT 1
+         FROM chat_messages em
+         WHERE em.thread_id = t.id
+           AND em.deleted_at IS NULL
+       )
+       AND COALESCE(s.is_deleted_from_inbox, false) = false
+       AND (
+         COALESCE(s.relationship_state::text, 'ACTIVE') <> 'CHAT_ENDED'
+         OR COALESCE(s.relationship_state_set_at, NOW()) >= NOW() - INTERVAL '3 days'
+       )`,
+    [viewerId]
+  );
+  return Number(res.rows[0]?.total || 0);
+}
+
 async function markThreadRead(viewerId, threadId) {
   const ok = await ensureParticipant(threadId, viewerId);
   if (!ok) {
@@ -892,6 +932,7 @@ async function getOrCreateDirectThread(viewerId, targetUserId) {
 
 module.exports = {
   listThreads,
+  sumUnreadMessages,
   listThreadMessages,
   sendMessage,
   evaluateChatLock,

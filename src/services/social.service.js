@@ -570,6 +570,42 @@ async function sendCommentRequest(viewerId, targetUserId, rawMessage) {
   }
 }
 
+/** Pending incoming REQUEST / COMMENT_REQUEST rows visible in the notification centre (same filters as list). */
+async function countPendingIncomingFriendRequests(viewerId) {
+  const res = await query(
+    `SELECT COUNT(*)::int AS c
+     FROM user_interactions ui
+     JOIN users u ON u.id = ui.user_id
+     WHERE ui.target_id = $1
+       AND ui.interaction_type IN ('REQUEST', 'COMMENT_REQUEST')
+       AND ui.request_status = 'PENDING'
+       AND u.deleted_at IS NULL
+       AND u.account_state NOT IN ('DELETED', 'BANNED', 'UNDERAGE_BLOCKED')
+       AND (
+         EXISTS (
+           SELECT 1
+           FROM user_filter_preferred_genders ufg
+           WHERE ufg.user_id = $1
+             AND ufg.gender = u.gender_main
+         )
+         OR (
+           NOT EXISTS (SELECT 1 FROM user_filter_preferred_genders WHERE user_id = $1)
+           AND (
+             EXISTS (
+               SELECT 1
+               FROM user_dating_preferences udpv
+               WHERE udpv.user_id = $1
+                 AND udpv.preferred_gender = u.gender_main
+             )
+             OR NOT EXISTS (SELECT 1 FROM user_dating_preferences WHERE user_id = $1)
+           )
+         )
+       )`,
+    [viewerId]
+  );
+  return Number(res.rows[0]?.c || 0);
+}
+
 async function ignoreProfile(viewerId, targetUserId) {
   const client = await pool.connect();
   try {
@@ -1081,6 +1117,7 @@ module.exports = {
   sendCommentRequest,
   ignoreProfile,
   respondToRequest,
+  countPendingIncomingFriendRequests,
   listIncomingFriendRequests,
   listFriends,
   unfriendUser,
