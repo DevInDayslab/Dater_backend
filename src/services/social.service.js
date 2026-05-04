@@ -440,7 +440,6 @@ async function ensureDirectChatThreadForPair(client, userA, userB, createdFromIn
 
 async function sendFriendRequest(viewerId, targetUserId) {
   const client = await pool.connect();
-  let senderName = "Someone";
   try {
     await client.query("BEGIN");
     await assertEligibleFriendRequestPair(client, viewerId, targetUserId);
@@ -470,20 +469,25 @@ async function sendFriendRequest(viewerId, targetUserId) {
       [targetUserId, viewerId]
     );
     const senderRes = await client.query(
-      `SELECT name, hide_my_name
+      `SELECT name, hide_my_name, age_years
        FROM users
        WHERE id = $1
        LIMIT 1`,
       [viewerId]
     );
-    senderName = displayNameForPrivacy(senderRes.rows[0]?.name || "Someone", senderRes.rows[0]?.hide_my_name === true);
+    const sRow = senderRes.rows[0];
+    const senderDisplay = displayNameForPrivacy(sRow?.name || "Someone", sRow?.hide_my_name === true);
+    const senderAge =
+      sRow?.age_years != null && Number.isFinite(Number(sRow.age_years)) ? Number(sRow.age_years) : 0;
+    const pushTitle =
+      senderAge > 0 ? `${senderDisplay}, ${Math.round(senderAge)}` : senderDisplay;
     await client.query("COMMIT");
     sendEventDataNotification({
       recipientUserId: targetUserId,
       actorUserId: viewerId,
       eventType: "FRIEND_REQUEST_RECEIVED",
-      title: "New Friend Request!",
-      body: `${senderName} wants to connect.`,
+      title: pushTitle,
+      body: "Sent you a friend request!",
       extraData: { senderId: viewerId },
     }).catch(() => {});
     return getPublicProfile(viewerId, targetUserId, { consumeView: false });
@@ -506,7 +510,6 @@ async function sendCommentRequest(viewerId, targetUserId, rawMessage) {
     throw error;
   }
   const client = await pool.connect();
-  let senderName = "Someone";
   try {
     await client.query("BEGIN");
     await assertEligibleFriendRequestPair(client, viewerId, targetUserId);
@@ -537,20 +540,25 @@ async function sendCommentRequest(viewerId, targetUserId, rawMessage) {
       [targetUserId, viewerId]
     );
     const senderRes = await client.query(
-      `SELECT name, hide_my_name
+      `SELECT name, hide_my_name, age_years
        FROM users
        WHERE id = $1
        LIMIT 1`,
       [viewerId]
     );
-    senderName = displayNameForPrivacy(senderRes.rows[0]?.name || "Someone", senderRes.rows[0]?.hide_my_name === true);
+    const sRow = senderRes.rows[0];
+    const senderDisplay = displayNameForPrivacy(sRow?.name || "Someone", sRow?.hide_my_name === true);
+    const senderAge =
+      sRow?.age_years != null && Number.isFinite(Number(sRow.age_years)) ? Number(sRow.age_years) : 0;
+    const pushTitle =
+      senderAge > 0 ? `${senderDisplay}, ${Math.round(senderAge)}` : senderDisplay;
     await client.query("COMMIT");
     sendEventDataNotification({
       recipientUserId: targetUserId,
       actorUserId: viewerId,
       eventType: "COMMENT",
-      title: "New Comment",
-      body: `${senderName} sent you a comment.`,
+      title: pushTitle,
+      body: "Sent you a comment!",
       extraData: { senderId: viewerId },
     }).catch(() => {});
     return getPublicProfile(viewerId, targetUserId, { consumeView: false });
@@ -951,6 +959,7 @@ async function respondToRequest(viewerId, fromUserId, decision) {
   }
   const client = await pool.connect();
   let accepterName = "Someone";
+  let pushAcceptTitle = "";
   try {
     await client.query("BEGIN");
     const requestRes = await client.query(
@@ -1032,13 +1041,18 @@ async function respondToRequest(viewerId, fromUserId, decision) {
         [fromUserId, viewerId]
       );
       const accepterRes = await client.query(
-        `SELECT name, hide_my_name
+        `SELECT name, hide_my_name, age_years
          FROM users
          WHERE id = $1
          LIMIT 1`,
         [viewerId]
       );
-      accepterName = displayNameForPrivacy(accepterRes.rows[0]?.name || "Someone", accepterRes.rows[0]?.hide_my_name === true);
+      const aRow = accepterRes.rows[0];
+      accepterName = displayNameForPrivacy(aRow?.name || "Someone", aRow?.hide_my_name === true);
+      const accepterAge =
+        aRow?.age_years != null && Number.isFinite(Number(aRow.age_years)) ? Number(aRow.age_years) : 0;
+      pushAcceptTitle =
+        accepterAge > 0 ? `${accepterName}, ${Math.round(accepterAge)}` : accepterName;
     }
     await client.query("COMMIT");
     if (normalizedDecision === "ACCEPTED") {
@@ -1046,8 +1060,8 @@ async function respondToRequest(viewerId, fromUserId, decision) {
         recipientUserId: fromUserId,
         actorUserId: viewerId,
         eventType: "FRIEND_REQUEST_ACCEPTED",
-        title: "Request Accepted",
-        body: `${accepterName} accepted your friend request.`,
+        title: pushAcceptTitle || accepterName,
+        body: "Accepted your friend request!",
         extraData: { friendId: viewerId },
       }).catch(() => {});
     }
