@@ -107,7 +107,59 @@ function getAllIndianCities() {
   });
 }
 
+const normCityKey = (s) => String(s || "").trim().toLowerCase();
+
+/**
+ * Resolve an app "switch city" label (e.g. "New Delhi, DL") to lat/lng from india_cities.json.
+ * Used when the viewer browses by manual city but is physically elsewhere.
+ */
+function resolveIndiaBrowseAnchor(preferredLocationCityRaw) {
+  const label = String(preferredLocationCityRaw || "").trim();
+  if (!label) return null;
+
+  const all = getAllIndianCities();
+  const byLabel = new Map();
+  for (const row of all) {
+    byLabel.set(normCityKey(row.cityStateLabel), row);
+  }
+
+  const exact = byLabel.get(normCityKey(label));
+  if (exact) {
+    const entry = cities.find(
+      (c) => normCityKey(c.city) === normCityKey(exact.city) && normCityKey(c.state) === normCityKey(exact.state)
+    );
+    if (entry && Number.isFinite(Number(entry.lat)) && Number.isFinite(Number(entry.lng))) {
+      return { lat: Number(entry.lat), lng: Number(entry.lng) };
+    }
+  }
+
+  const part0 = normCityKey(label.split(",")[0]);
+  const part1 = normCityKey(label.split(",")[1] || "");
+  if (part0) {
+    const stateMatch = part1
+      ? all.find(
+          (r) => normCityKey(r.city) === part0 && (normCityKey(r.stateCode) === part1 || normCityKey(r.state) === part1)
+        )
+      : null;
+    const candidates = stateMatch
+      ? [stateMatch]
+      : all.filter((r) => normCityKey(r.city) === part0);
+    if (candidates.length === 1) {
+      const row = candidates[0];
+      const entry = cities.find(
+        (c) => normCityKey(c.city) === normCityKey(row.city) && normCityKey(c.state) === normCityKey(row.state)
+      );
+      if (entry && Number.isFinite(Number(entry.lat)) && Number.isFinite(Number(entry.lng))) {
+        return { lat: Number(entry.lat), lng: Number(entry.lng) };
+      }
+    }
+  }
+
+  return null;
+}
+
 module.exports = {
   getCityAndState,
   getAllIndianCities,
+  resolveIndiaBrowseAnchor,
 };

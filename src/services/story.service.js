@@ -10,6 +10,7 @@ const {
   advMatchSmokingAnd,
   advMatchEthnicityAnd,
 } = require("../utils/advancedFilterMatchSql");
+const { resolveIndiaBrowseAnchor } = require("./geocoder.service");
 
 function normalizedPair(a, b) {
   return a < b ? [a, b] : [b, a];
@@ -781,6 +782,10 @@ async function listStoryReelForViewer(viewerId) {
   const { ageMin, ageMax } = resolveFeedAgeBounds(viewer);
   const onlyVerified = viewer.only_verified_profiles === true;
   const maxUsers = 60;
+  const prefCityRaw = String(viewer.preferred_location_city || "").trim();
+  const browseAnchorCoords = prefCityRaw ? resolveIndiaBrowseAnchor(prefCityRaw) : null;
+  const browseAnchorLat = browseAnchorCoords != null ? browseAnchorCoords.lat : null;
+  const browseAnchorLng = browseAnchorCoords != null ? browseAnchorCoords.lng : null;
 
   const res = await query(
     `WITH viewer AS (
@@ -876,7 +881,14 @@ async function listStoryReelForViewer(viewerId) {
                 OR EXISTS (SELECT 1 FROM user_filter_pet_preferences WHERE user_id = u.id LIMIT 1)
                 OR EXISTS (SELECT 1 FROM user_filter_ethnicity_preferences WHERE user_id = u.id LIMIT 1)
                 OR EXISTS (SELECT 1 FROM user_filter_pronoun_preferences WHERE user_id = u.id LIMIT 1)
-              ) AS filter_advanced_active
+              ) AS filter_advanced_active,
+              $6::double precision AS browse_anchor_lat,
+              $7::double precision AS browse_anchor_lng,
+              CASE
+                WHEN $6::double precision IS NOT NULL AND $7::double precision IS NOT NULL THEN
+                  ST_SetSRID(ST_MakePoint($7::double precision, $6::double precision), 4326)::geography
+                ELSE NULL::geography
+              END AS browse_anchor_geog
        FROM users u
        JOIN user_filters uf ON uf.user_id = u.id
        WHERE u.id = $1::uuid
@@ -940,6 +952,15 @@ ${advMatchEthnicityAnd}
                   OR LOWER(TRIM(SPLIT_PART(c.living_in_city, ',', 1))) =
                      LOWER(TRIM(SPLIT_PART(v.preferred_location_city, ',', 1)))
                 )
+                AND (
+                  v.browse_anchor_geog IS NULL
+                  OR c.location IS NULL
+                  OR ST_DWithin(
+                    c.location::geography,
+                    v.browse_anchor_geog,
+                    (v.distance_km * 1000)::double precision
+                  )
+                )
               )
                OR (
                  v.using_switch_city = FALSE
@@ -972,7 +993,26 @@ ${advMatchEthnicityAnd}
                  AND c.location IS NOT NULL
                  AND (
                    (
-                     COALESCE(c.living_in_city_mode, 'FOLLOW_DEVICE') = 'MANUAL_SWITCH'
+                     v.using_switch_city = TRUE
+                     AND v.browse_anchor_geog IS NOT NULL
+                     AND ST_DWithin(
+                       c.location::geography,
+                       v.browse_anchor_geog,
+                       (
+                         LEAST(
+                           150,
+                           CASE
+                             WHEN COALESCE(cdf.expand_distance, FALSE)
+                               THEN ROUND(LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20))) * 1.75)
+                             ELSE LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20)))
+                           END
+                         ) * 1000
+                       )::double precision
+                     )
+                   )
+                   OR (
+                     v.using_switch_city = FALSE
+                     AND COALESCE(c.living_in_city_mode, 'FOLLOW_DEVICE') = 'MANUAL_SWITCH'
                      AND NULLIF(TRIM(vu.living_in_city), '') IS NOT NULL
                      AND NULLIF(TRIM(COALESCE(cdf.preferred_location_city, c.living_in_city)), '') IS NOT NULL
                      AND (
@@ -982,7 +1022,39 @@ ${advMatchEthnicityAnd}
                      )
                    )
                    OR (
-                     COALESCE(c.living_in_city_mode, 'FOLLOW_DEVICE') <> 'MANUAL_SWITCH'
+                     v.using_switch_city = FALSE
+                     AND COALESCE(c.living_in_city_mode, 'FOLLOW_DEVICE') <> 'MANUAL_SWITCH'
+                     AND ST_DWithin(
+                       c.location::geography,
+                       vu.location::geography,
+                       (
+                         LEAST(
+                           150,
+                           CASE
+                             WHEN COALESCE(cdf.expand_distance, FALSE)
+                               THEN ROUND(LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20))) * 1.75)
+                             ELSE LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20)))
+                           END
+                         ) * 1000
+                       )::double precision
+                     )
+                   )
+                   OR (
+                     v.using_switch_city = TRUE
+                     AND v.browse_anchor_geog IS NULL
+                     AND COALESCE(c.living_in_city_mode, 'FOLLOW_DEVICE') = 'MANUAL_SWITCH'
+                     AND NULLIF(TRIM(vu.living_in_city), '') IS NOT NULL
+                     AND NULLIF(TRIM(COALESCE(cdf.preferred_location_city, c.living_in_city)), '') IS NOT NULL
+                     AND (
+                       LOWER(TRIM(vu.living_in_city)) = LOWER(TRIM(COALESCE(cdf.preferred_location_city, c.living_in_city)))
+                       OR LOWER(TRIM(SPLIT_PART(vu.living_in_city, ',', 1))) =
+                          LOWER(TRIM(SPLIT_PART(COALESCE(cdf.preferred_location_city, c.living_in_city), ',', 1)))
+                     )
+                   )
+                   OR (
+                     v.using_switch_city = TRUE
+                     AND v.browse_anchor_geog IS NULL
+                     AND COALESCE(c.living_in_city_mode, 'FOLLOW_DEVICE') <> 'MANUAL_SWITCH'
                      AND ST_DWithin(
                        c.location::geography,
                        vu.location::geography,
@@ -1162,13 +1234,13 @@ ${advMatchEthnicityAnd}
        FROM story_rows
        GROUP BY user_id
        ORDER BY is_self DESC, viewer_has_unseen_story DESC, user_id
-       LIMIT $6::int
+       LIMIT $8::int
      )
      SELECT sr.*
      FROM story_rows sr
      JOIN eligible_owner_ids eo ON eo.user_id = sr.user_id
      ORDER BY sr.user_id, sr.created_at ASC`,
-    [viewerId, distanceKm, ageMin, ageMax, onlyVerified, maxUsers]
+    [viewerId, distanceKm, ageMin, ageMax, onlyVerified, browseAnchorLat, browseAnchorLng, maxUsers]
   );
 
   const byUser = new Map();

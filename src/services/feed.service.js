@@ -11,6 +11,7 @@ const { buildRelationshipState } = socialService;
 const { displayNameForPrivacy } = require("../utils/displayName");
 const { normalizeExpiredPauseForUser } = require("./accountLifecycle.service");
 const s3Media = require("./s3Media.service");
+const { resolveIndiaBrowseAnchor } = require("./geocoder.service");
 
 const FEED_PAGE_SIZE_DEFAULT = 20;
 const FEED_PAGE_SIZE_MAX = 25;
@@ -175,6 +176,10 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
 
   const distanceKm = resolveFeedDistanceKm(viewer);
   const { ageMin, ageMax } = resolveFeedAgeBounds(viewer);
+  const prefCityRaw = String(viewer.preferred_location_city || "").trim();
+  const browseAnchorCoords = prefCityRaw ? resolveIndiaBrowseAnchor(prefCityRaw) : null;
+  const browseAnchorLat = browseAnchorCoords != null ? browseAnchorCoords.lat : null;
+  const browseAnchorLng = browseAnchorCoords != null ? browseAnchorCoords.lng : null;
 
   let feedPoolRes = await query(
     `WITH viewer AS (
@@ -270,7 +275,14 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
                 OR EXISTS (SELECT 1 FROM user_filter_pet_preferences WHERE user_id = u.id LIMIT 1)
                 OR EXISTS (SELECT 1 FROM user_filter_ethnicity_preferences WHERE user_id = u.id LIMIT 1)
                 OR EXISTS (SELECT 1 FROM user_filter_pronoun_preferences WHERE user_id = u.id LIMIT 1)
-              ) AS filter_advanced_active
+              ) AS filter_advanced_active,
+              $7::double precision AS browse_anchor_lat,
+              $8::double precision AS browse_anchor_lng,
+              CASE
+                WHEN $7::double precision IS NOT NULL AND $8::double precision IS NOT NULL THEN
+                  ST_SetSRID(ST_MakePoint($8::double precision, $7::double precision), 4326)::geography
+                ELSE NULL::geography
+              END AS browse_anchor_geog
        FROM users u
        JOIN user_filters uf ON uf.user_id = u.id
        WHERE u.id = $1::uuid
@@ -291,10 +303,15 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
               c.new_here_until,
               c.living_in_city,
               COALESCE(pb.boost_active, FALSE) AS boost_active,
-              ST_Distance(
-                c.location::geography,
-                vu.location::geography
-              ) / 1000.0 AS distance_km,
+              CASE
+                WHEN v.using_switch_city = TRUE
+                  AND v.browse_anchor_geog IS NOT NULL
+                  AND c.location IS NOT NULL THEN
+                  ST_Distance(c.location::geography, v.browse_anchor_geog) / 1000.0
+                WHEN vu.location IS NOT NULL AND c.location IS NOT NULL THEN
+                  ST_Distance(c.location::geography, vu.location::geography) / 1000.0
+                ELSE NULL
+              END AS distance_km,
               COALESCE((
                 SELECT up.photo_url
                 FROM user_photos up
@@ -385,6 +402,15 @@ ${advMatchEthnicityAnd}
                   OR LOWER(TRIM(SPLIT_PART(c.living_in_city, ',', 1))) =
                      LOWER(TRIM(SPLIT_PART(v.preferred_location_city, ',', 1)))
                 )
+                AND (
+                  v.browse_anchor_geog IS NULL
+                  OR c.location IS NULL
+                  OR ST_DWithin(
+                    c.location::geography,
+                    v.browse_anchor_geog,
+                    (v.distance_km * 1000)::double precision
+                  )
+                )
               )
                OR (
                  v.using_switch_city = FALSE
@@ -415,22 +441,53 @@ ${advMatchEthnicityAnd}
                (
                  vu.location IS NOT NULL
                  AND c.location IS NOT NULL
-                 -- Reciprocal location should be distance-based when both users have coordinates.
-                 -- "Switch city" is a browsing/viewer setting and must not prevent nearby profiles
-                 -- from being mutually visible.
-                 AND ST_DWithin(
-                   c.location::geography,
-                   vu.location::geography,
+                 AND (
                    (
-                     LEAST(
-                       150,
-                       CASE
-                         WHEN COALESCE(cdf.expand_distance, FALSE)
-                           THEN ROUND(LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20))) * 1.75)
-                         ELSE LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20)))
-                       END
-                     ) * 1000
-                   )::double precision
+                     v.using_switch_city = TRUE
+                     AND v.browse_anchor_geog IS NOT NULL
+                     AND ST_DWithin(
+                       c.location::geography,
+                       v.browse_anchor_geog,
+                       (
+                         LEAST(
+                           150,
+                           CASE
+                             WHEN COALESCE(cdf.expand_distance, FALSE)
+                               THEN ROUND(LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20))) * 1.75)
+                             ELSE LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20)))
+                           END
+                         ) * 1000
+                       )::double precision
+                     )
+                   )
+                   OR (
+                     v.using_switch_city = FALSE
+                     AND ST_DWithin(
+                       c.location::geography,
+                       vu.location::geography,
+                       (
+                         LEAST(
+                           150,
+                           CASE
+                             WHEN COALESCE(cdf.expand_distance, FALSE)
+                               THEN ROUND(LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20))) * 1.75)
+                             ELSE LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20)))
+                           END
+                         ) * 1000
+                       )::double precision
+                     )
+                   )
+                   OR (
+                     v.using_switch_city = TRUE
+                     AND v.browse_anchor_geog IS NULL
+                     AND NULLIF(TRIM(vu.living_in_city), '') IS NOT NULL
+                     AND NULLIF(TRIM(COALESCE(cdf.preferred_location_city, c.living_in_city)), '') IS NOT NULL
+                     AND (
+                       LOWER(TRIM(vu.living_in_city)) = LOWER(TRIM(COALESCE(cdf.preferred_location_city, c.living_in_city)))
+                       OR LOWER(TRIM(SPLIT_PART(vu.living_in_city, ',', 1))) =
+                          LOWER(TRIM(SPLIT_PART(COALESCE(cdf.preferred_location_city, c.living_in_city), ',', 1)))
+                     )
+                   )
                  )
                )
                OR (
@@ -648,6 +705,8 @@ ${advMatchEthnicityAnd}
       ageMax,
       viewer.is_verified === true ? viewer.only_verified_profiles === true : false,
       feedShuffleSeed,
+      browseAnchorLat,
+      browseAnchorLng,
     ]
   );
 
