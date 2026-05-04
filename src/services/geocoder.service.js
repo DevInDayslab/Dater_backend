@@ -155,6 +155,21 @@ function resolveIndiaBrowseAnchor(preferredLocationCityRaw) {
     }
   }
 
+  // Delhi NCT: list may show both "Delhi, DL" and "New Delhi, DL" as separate picks; anchor should work for either.
+  const cityKey = normCityKey(label.split(",")[0]);
+  const stateKey = normCityKey(label.split(",")[1] || "");
+  if (
+    (cityKey === "delhi" || cityKey === "new delhi") &&
+    (!stateKey || stateKey === "dl" || stateKey === "delhi")
+  ) {
+    const entry =
+      cities.find((row) => normCityKey(row.city) === "new delhi" && normCityKey(row.state) === "delhi") ||
+      cities.find((row) => normCityKey(row.city) === "delhi" && normCityKey(row.state) === "delhi");
+    if (entry && Number.isFinite(Number(entry.lat)) && Number.isFinite(Number(entry.lng))) {
+      return { lat: Number(entry.lat), lng: Number(entry.lng) };
+    }
+  }
+
   return null;
 }
 

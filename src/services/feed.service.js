@@ -193,10 +193,8 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
                 FROM user_filter_preferred_genders ufg
                 WHERE ufg.user_id = u.id
               ), ARRAY[]::varchar[]) AS preferred_genders,
-              COALESCE(
-                uf.preferred_location_city,
-                NULLIF(TRIM(u.living_in_city), '')
-              ) AS preferred_location_city,
+              -- Feed browse locale is filter-only (premium switch city or current GPS); not profile living_in_city.
+              uf.preferred_location_city AS preferred_location_city,
               (uf.preferred_location_city IS NOT NULL AND NULLIF(TRIM(uf.preferred_location_city), '') IS NOT NULL) AS using_switch_city,
               (COALESCE(u.is_premium, FALSE)
                 OR (u.premium_expires_at IS NOT NULL AND u.premium_expires_at > NOW())) AS premium_effective,
@@ -394,24 +392,27 @@ ${advMatchEthnicityAnd}
              AND c.location IS NOT NULL
              AND (
               (
+                -- Resolved browse anchor: show everyone within viewer radius of that point (city labels may differ).
                 v.using_switch_city = TRUE
-                AND NULLIF(TRIM(c.living_in_city), '') IS NOT NULL
-                AND NULLIF(TRIM(v.preferred_location_city), '') IS NOT NULL
-                AND (
-                  LOWER(TRIM(c.living_in_city)) = LOWER(TRIM(v.preferred_location_city))
-                  OR LOWER(TRIM(SPLIT_PART(c.living_in_city, ',', 1))) =
-                     LOWER(TRIM(SPLIT_PART(v.preferred_location_city, ',', 1)))
-                )
-                AND (
-                  v.browse_anchor_geog IS NULL
-                  OR c.location IS NULL
-                  OR ST_DWithin(
-                    c.location::geography,
-                    v.browse_anchor_geog,
-                    (v.distance_km * 1000)::double precision
-                  )
+                AND v.browse_anchor_geog IS NOT NULL
+                AND ST_DWithin(
+                  c.location::geography,
+                  v.browse_anchor_geog,
+                  (v.distance_km * 1000)::double precision
                 )
               )
+               OR (
+                 -- Switch city but anchor could not be resolved: fall back to living_in_city string match.
+                 v.using_switch_city = TRUE
+                 AND v.browse_anchor_geog IS NULL
+                 AND NULLIF(TRIM(c.living_in_city), '') IS NOT NULL
+                 AND NULLIF(TRIM(v.preferred_location_city), '') IS NOT NULL
+                 AND (
+                   LOWER(TRIM(c.living_in_city)) = LOWER(TRIM(v.preferred_location_city))
+                   OR LOWER(TRIM(SPLIT_PART(c.living_in_city, ',', 1))) =
+                      LOWER(TRIM(SPLIT_PART(v.preferred_location_city, ',', 1)))
+                 )
+               )
                OR (
                  v.using_switch_city = FALSE
                  AND ST_DWithin(
@@ -424,13 +425,14 @@ ${advMatchEthnicityAnd}
            )
            OR (
              vu.location IS NULL
-             AND NULLIF(TRIM(vu.living_in_city), '') IS NOT NULL
-             AND NULLIF(TRIM(c.living_in_city), '') IS NOT NULL
-            AND (
-              LOWER(TRIM(vu.living_in_city)) = LOWER(TRIM(c.living_in_city))
-              OR LOWER(TRIM(SPLIT_PART(vu.living_in_city, ',', 1))) =
-                 LOWER(TRIM(SPLIT_PART(c.living_in_city, ',', 1)))
-            )
+             AND v.using_switch_city = TRUE
+             AND v.browse_anchor_geog IS NOT NULL
+             AND c.location IS NOT NULL
+             AND ST_DWithin(
+               c.location::geography,
+               v.browse_anchor_geog,
+               (v.distance_km * 1000)::double precision
+             )
            )
          )
          AND EXISTS (
@@ -480,24 +482,24 @@ ${advMatchEthnicityAnd}
                    OR (
                      v.using_switch_city = TRUE
                      AND v.browse_anchor_geog IS NULL
-                     AND NULLIF(TRIM(vu.living_in_city), '') IS NOT NULL
-                     AND NULLIF(TRIM(COALESCE(cdf.preferred_location_city, c.living_in_city)), '') IS NOT NULL
+                     AND NULLIF(TRIM(v.preferred_location_city), '') IS NOT NULL
+                     AND NULLIF(TRIM(cdf.preferred_location_city), '') IS NOT NULL
                      AND (
-                       LOWER(TRIM(vu.living_in_city)) = LOWER(TRIM(COALESCE(cdf.preferred_location_city, c.living_in_city)))
-                       OR LOWER(TRIM(SPLIT_PART(vu.living_in_city, ',', 1))) =
-                          LOWER(TRIM(SPLIT_PART(COALESCE(cdf.preferred_location_city, c.living_in_city), ',', 1)))
+                       LOWER(TRIM(v.preferred_location_city)) = LOWER(TRIM(cdf.preferred_location_city))
+                       OR LOWER(TRIM(SPLIT_PART(v.preferred_location_city, ',', 1))) =
+                          LOWER(TRIM(SPLIT_PART(cdf.preferred_location_city, ',', 1)))
                      )
                    )
                  )
                )
                OR (
                  vu.location IS NULL
-                 AND NULLIF(TRIM(c.living_in_city), '') IS NOT NULL
-                 AND NULLIF(TRIM(vu.living_in_city), '') IS NOT NULL
+                 AND NULLIF(TRIM(v.preferred_location_city), '') IS NOT NULL
+                 AND NULLIF(TRIM(cdf.preferred_location_city), '') IS NOT NULL
                  AND (
-                   LOWER(TRIM(c.living_in_city)) = LOWER(TRIM(vu.living_in_city))
-                   OR LOWER(TRIM(SPLIT_PART(c.living_in_city, ',', 1))) =
-                      LOWER(TRIM(SPLIT_PART(vu.living_in_city, ',', 1)))
+                   LOWER(TRIM(v.preferred_location_city)) = LOWER(TRIM(cdf.preferred_location_city))
+                   OR LOWER(TRIM(SPLIT_PART(v.preferred_location_city), ',', 1))) =
+                      LOWER(TRIM(SPLIT_PART(cdf.preferred_location_city, ',', 1)))
                  )
                )
              )
