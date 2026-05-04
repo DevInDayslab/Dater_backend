@@ -115,7 +115,7 @@ async function viewerToCandidatePrimaryGate(client, viewer, candidate, viewerBro
   }
 
   if (!usingSwitch) {
-    const pass = await sqlBool(
+    const gpsPass = await sqlBool(
       client,
       `SELECT ST_DWithin(
               c.location::geography,
@@ -127,10 +127,43 @@ async function viewerToCandidatePrimaryGate(client, viewer, candidate, viewerBro
        WHERE vu.id = $1::uuid`,
       [viewer.id, candidate.id, viewerBrowsingKm]
     );
+
+    let premiumTravelerAnchorPass = false;
+    let travelerBrowseAnchor = null;
+    const candPref = String(candidate.preferred_location_city || "").trim();
+    if (resolveEffectivePremium(candidate) && candPref) {
+      const ta = resolveIndiaBrowseAnchor(candPref);
+      if (ta) {
+        travelerBrowseAnchor = { lat: ta.lat, lng: ta.lng };
+        premiumTravelerAnchorPass = await sqlBool(
+          client,
+          `SELECT ST_DWithin(
+                  ST_SetSRID(ST_MakePoint($2::double precision, $3::double precision), 4326)::geography,
+                  vu.location::geography,
+                  ($4 * 1000)::double precision
+                ) AS pass
+           FROM users vu
+           WHERE vu.id = $1::uuid`,
+          [viewer.id, ta.lng, ta.lat, viewerBrowsingKm]
+        );
+      }
+    }
+
+    const pass = gpsPass || premiumTravelerAnchorPass;
+    const mode =
+      gpsPass && premiumTravelerAnchorPass
+        ? "GPS_OR_PREMIUM_TRAVELER_ANCHOR_ST_DWITHIN_BOTH"
+        : premiumTravelerAnchorPass
+          ? "PREMIUM_TRAVELER_BROWSE_ANCHOR_NEAR_VIEWER_GPS"
+          : "GPS_VIEWER_RADIUS_ST_DWITHIN";
+
     return {
-      mode: "GPS_VIEWER_RADIUS_ST_DWITHIN",
+      mode,
       pass,
       viewerBrowsingKm,
+      gpsPass,
+      premiumTravelerAnchorPass,
+      travelerBrowseAnchor,
     };
   }
 
@@ -199,7 +232,7 @@ async function candidateReciprocalGate(client, viewer, candidate, browseAnchor, 
   }
 
   if (!viewerUsingSwitchCity) {
-    const pass = await sqlBool(
+    const gpsPass = await sqlBool(
       client,
       `SELECT ST_DWithin(
               c.location::geography,
@@ -211,10 +244,44 @@ async function candidateReciprocalGate(client, viewer, candidate, browseAnchor, 
        WHERE vu.id = $1::uuid`,
       [viewer.id, candidate.id, meters]
     );
+
+    let premiumTravelerAnchorPass = false;
+    let travelerBrowseAnchor = null;
+    const candPref = String(candidate.preferred_location_city || "").trim();
+    if (resolveEffectivePremium(candidate) && candPref) {
+      const ta = resolveIndiaBrowseAnchor(candPref);
+      if (ta) {
+        travelerBrowseAnchor = { lat: ta.lat, lng: ta.lng };
+        premiumTravelerAnchorPass = await sqlBool(
+          client,
+          `SELECT ST_DWithin(
+                  ST_SetSRID(ST_MakePoint($2::double precision, $3::double precision), 4326)::geography,
+                  vu.location::geography,
+                  $4::double precision
+                ) AS pass
+           FROM users vu
+           WHERE vu.id = $1::uuid`,
+          [viewer.id, ta.lng, ta.lat, meters]
+        );
+      }
+    }
+
+    const pass = gpsPass || premiumTravelerAnchorPass;
+    const mode =
+      gpsPass && premiumTravelerAnchorPass
+        ? "RECIPROCAL_GPS_OR_PREMIUM_TRAVELER_ANCHOR_BOTH"
+        : premiumTravelerAnchorPass
+          ? "RECIPROCAL_PREMIUM_TRAVELER_ANCHOR_TO_VIEWER_GPS"
+          : "RECIPROCAL_ST_DWITHIN_CANDIDATE_TO_VIEWER_GPS";
+
     return {
-      mode: "RECIPROCAL_ST_DWITHIN_CANDIDATE_TO_VIEWER_GPS",
+      mode,
       pass,
       candidateReciprocalRadiusKm: reciprocalKm,
+      meters,
+      gpsPass,
+      premiumTravelerAnchorPass,
+      travelerBrowseAnchor,
     };
   }
 

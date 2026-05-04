@@ -11,7 +11,7 @@ const { buildRelationshipState } = socialService;
 const { displayNameForPrivacy } = require("../utils/displayName");
 const { normalizeExpiredPauseForUser } = require("./accountLifecycle.service");
 const s3Media = require("./s3Media.service");
-const { resolveIndiaBrowseAnchor } = require("./geocoder.service");
+const { resolveIndiaBrowseAnchor, getIndiaBrowseAnchorUnnestArrays } = require("./geocoder.service");
 
 const FEED_PAGE_SIZE_DEFAULT = 20;
 const FEED_PAGE_SIZE_MAX = 25;
@@ -180,6 +180,7 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
   const browseAnchorCoords = prefCityRaw ? resolveIndiaBrowseAnchor(prefCityRaw) : null;
   const browseAnchorLat = browseAnchorCoords != null ? browseAnchorCoords.lat : null;
   const browseAnchorLng = browseAnchorCoords != null ? browseAnchorCoords.lng : null;
+  const anchorArrays = getIndiaBrowseAnchorUnnestArrays();
 
   let feedPoolRes = await query(
     `WITH viewer AS (
@@ -285,6 +286,10 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
        JOIN user_filters uf ON uf.user_id = u.id
        WHERE u.id = $1::uuid
      ),
+     city_anchor AS (
+       SELECT *
+       FROM unnest($9::text[], $10::double precision[], $11::double precision[]) AS ca(label_norm, lat, lng)
+     ),
      candidate_staging AS (
        SELECT c.id,
               c.name,
@@ -306,6 +311,36 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
                   AND v.browse_anchor_geog IS NOT NULL
                   AND c.location IS NOT NULL THEN
                   ST_Distance(c.location::geography, v.browse_anchor_geog) / 1000.0
+                WHEN vu.location IS NOT NULL
+                  AND c.location IS NOT NULL
+                  AND ST_DWithin(
+                    c.location::geography,
+                    vu.location::geography,
+                    (v.distance_km * 1000)::double precision
+                  ) THEN
+                  ST_Distance(c.location::geography, vu.location::geography) / 1000.0
+                WHEN vu.location IS NOT NULL
+                  AND v.using_switch_city = FALSE
+                  AND (
+                    COALESCE(c.is_premium, FALSE)
+                    OR (c.premium_expires_at IS NOT NULL AND c.premium_expires_at > NOW())
+                  ) THEN
+                  (
+                    SELECT ST_Distance(
+                      ST_SetSRID(ST_MakePoint(ca.lng, ca.lat), 4326)::geography,
+                      vu.location::geography
+                    ) / 1000.0
+                    FROM user_filters cuf
+                    INNER JOIN city_anchor ca ON ca.label_norm = lower(trim(cuf.preferred_location_city))
+                    WHERE cuf.user_id = c.id
+                      AND NULLIF(TRIM(cuf.preferred_location_city), '') IS NOT NULL
+                      AND ST_DWithin(
+                        ST_SetSRID(ST_MakePoint(ca.lng, ca.lat), 4326)::geography,
+                        vu.location::geography,
+                        (v.distance_km * 1000)::double precision
+                      )
+                    LIMIT 1
+                  )
                 WHEN vu.location IS NOT NULL AND c.location IS NOT NULL THEN
                   ST_Distance(c.location::geography, vu.location::geography) / 1000.0
                 ELSE NULL
@@ -421,6 +456,26 @@ ${advMatchEthnicityAnd}
                    (v.distance_km * 1000)::double precision
                  )
                )
+               OR (
+                 v.using_switch_city = FALSE
+                 AND vu.location IS NOT NULL
+                 AND (
+                   COALESCE(c.is_premium, FALSE)
+                   OR (c.premium_expires_at IS NOT NULL AND c.premium_expires_at > NOW())
+                 )
+                 AND EXISTS (
+                   SELECT 1
+                   FROM user_filters cuf
+                   INNER JOIN city_anchor ca ON ca.label_norm = lower(trim(cuf.preferred_location_city))
+                   WHERE cuf.user_id = c.id
+                     AND NULLIF(TRIM(cuf.preferred_location_city), '') IS NOT NULL
+                     AND ST_DWithin(
+                       ST_SetSRID(ST_MakePoint(ca.lng, ca.lat), 4326)::geography,
+                       vu.location::geography,
+                       (v.distance_km * 1000)::double precision
+                     )
+                 )
+               )
              )
            )
            OR (
@@ -464,19 +519,44 @@ ${advMatchEthnicityAnd}
                    )
                    OR (
                      v.using_switch_city = FALSE
-                     AND ST_DWithin(
-                       c.location::geography,
-                       vu.location::geography,
-                       (
-                         LEAST(
-                           150,
-                           CASE
-                             WHEN COALESCE(cdf.expand_distance, FALSE)
-                               THEN ROUND(LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20))) * 1.75)
-                             ELSE LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20)))
-                           END
-                         ) * 1000
-                       )::double precision
+                     AND (
+                       ST_DWithin(
+                         c.location::geography,
+                         vu.location::geography,
+                         (
+                           LEAST(
+                             150,
+                             CASE
+                               WHEN COALESCE(cdf.expand_distance, FALSE)
+                                 THEN ROUND(LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20))) * 1.75)
+                               ELSE LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20)))
+                             END
+                           ) * 1000
+                         )::double precision
+                       )
+                       OR (
+                         (COALESCE(c.is_premium, FALSE) OR (c.premium_expires_at IS NOT NULL AND c.premium_expires_at > NOW()))
+                         AND NULLIF(TRIM(cdf.preferred_location_city), '') IS NOT NULL
+                         AND EXISTS (
+                           SELECT 1
+                           FROM city_anchor ca
+                           WHERE ca.label_norm = lower(trim(cdf.preferred_location_city))
+                             AND ST_DWithin(
+                               ST_SetSRID(ST_MakePoint(ca.lng, ca.lat), 4326)::geography,
+                               vu.location::geography,
+                               (
+                                 LEAST(
+                                   150,
+                                   CASE
+                                     WHEN COALESCE(cdf.expand_distance, FALSE)
+                                       THEN ROUND(LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20))) * 1.75)
+                                     ELSE LEAST(150, GREATEST(2, COALESCE(cdf.distance_pref_km, 20)))
+                                   END
+                                 ) * 1000
+                               )::double precision
+                             )
+                         )
+                       )
                      )
                    )
                    OR (
@@ -709,6 +789,9 @@ ${advMatchEthnicityAnd}
       feedShuffleSeed,
       browseAnchorLat,
       browseAnchorLng,
+      anchorArrays.anchorLabelNorms,
+      anchorArrays.anchorLats,
+      anchorArrays.anchorLngs,
     ]
   );
 

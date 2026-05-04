@@ -173,8 +173,59 @@ function resolveIndiaBrowseAnchor(preferredLocationCityRaw) {
   return null;
 }
 
+/** Cached parallel arrays for SQL `unnest(labels, lats, lngs)` (feed/story traveler injection). */
+let cachedIndiaBrowseAnchorUnnest = null;
+
+/**
+ * Builds normalized "City, ST" labels → coordinates from india_cities.json so Postgres can join
+ * `user_filters.preferred_location_city` to an anchor without calling Node geocoder per row.
+ */
+function getIndiaBrowseAnchorUnnestArrays() {
+  if (cachedIndiaBrowseAnchorUnnest) return cachedIndiaBrowseAnchorUnnest;
+
+  const norm = (s) => String(s || "").trim().toLowerCase();
+  const rows = [];
+  const seen = new Set();
+
+  function addRow(label, lat, lng) {
+    const key = norm(label);
+    if (!key || seen.has(key)) return;
+    const la = Number(lat);
+    const ln = Number(lng);
+    if (!Number.isFinite(la) || !Number.isFinite(ln)) return;
+    seen.add(key);
+    rows.push({ labelNorm: key, lat: la, lng: ln });
+  }
+
+  for (const row of cities) {
+    const city = String(row.city || "").trim();
+    const stateName = String(row.state || "").trim();
+    if (!city || !stateName) continue;
+    const stateCode = STATE_CODE_MAP[stateName] || stateName;
+    addRow(`${city}, ${stateCode}`, row.lat, row.lng);
+  }
+
+  const delhiEntry =
+    cities.find((r) => norm(r.city) === "new delhi" && norm(r.state) === "delhi") ||
+    cities.find((r) => norm(r.city) === "delhi" && norm(r.state) === "delhi");
+  if (delhiEntry) {
+    addRow("Delhi, DL", delhiEntry.lat, delhiEntry.lng);
+    addRow("New Delhi, DL", delhiEntry.lat, delhiEntry.lng);
+    addRow("delhi, delhi", delhiEntry.lat, delhiEntry.lng);
+    addRow("new delhi, delhi", delhiEntry.lat, delhiEntry.lng);
+  }
+
+  cachedIndiaBrowseAnchorUnnest = {
+    anchorLabelNorms: rows.map((r) => r.labelNorm),
+    anchorLats: rows.map((r) => r.lat),
+    anchorLngs: rows.map((r) => r.lng),
+  };
+  return cachedIndiaBrowseAnchorUnnest;
+}
+
 module.exports = {
   getCityAndState,
   getAllIndianCities,
   resolveIndiaBrowseAnchor,
+  getIndiaBrowseAnchorUnnestArrays,
 };
