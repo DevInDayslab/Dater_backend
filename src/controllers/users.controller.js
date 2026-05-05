@@ -2070,6 +2070,16 @@ async function registerPushToken(req, res) {
     const platform = String(req.body?.platform || "ANDROID").trim().toUpperCase() || "ANDROID";
     const deviceId = String(req.body?.deviceId || "").trim();
 
+    // One FCM installation token maps to one device; rebinding must clear prior accounts on this token.
+    await query(
+      `UPDATE user_push_tokens
+       SET is_active = FALSE,
+           last_seen_at = NOW()
+       WHERE token = $1
+         AND user_id <> $2::uuid`,
+      [token, userId]
+    );
+
     await query(
       `INSERT INTO user_push_tokens (user_id, token, platform, device_id, is_active, last_seen_at)
        VALUES ($1::uuid, $2, $3, $4, TRUE, NOW())
@@ -2090,6 +2100,30 @@ async function registerPushToken(req, res) {
   }
 }
 
+async function revokePushToken(req, res) {
+  try {
+    const userId = req.auth.userId;
+    const token = String(req.body?.token || "").trim();
+    if (!token) {
+      return res.status(400).json({ success: false, message: "Missing token" });
+    }
+    await query(
+      `UPDATE user_push_tokens
+       SET is_active = FALSE,
+           last_seen_at = NOW()
+       WHERE user_id = $1::uuid
+         AND token = $2`,
+      [userId, token]
+    );
+    return res.status(200).json({ success: true, message: "ok" });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to revoke push token",
+    });
+  }
+}
+
 module.exports = {
   getMe,
   ackModerationWarning,
@@ -2097,6 +2131,7 @@ module.exports = {
   getNotificationPreferences,
   patchNotificationPreferences,
   registerPushToken,
+  revokePushToken,
   deleteAccount,
   getMyFilters,
   getPublicProfile,

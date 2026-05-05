@@ -12,6 +12,7 @@ router.patch("/me/account-settings", requireAuth, usersController.patchAccountSe
 router.get("/me/notification-preferences", requireAuth, usersController.getNotificationPreferences);
 router.patch("/me/notification-preferences", requireAuth, usersController.patchNotificationPreferences);
 router.post("/me/push-tokens", requireAuth, usersController.registerPushToken);
+router.post("/me/push-tokens/revoke", requireAuth, usersController.revokePushToken);
 router.post("/me/delete-account", requireAuth, usersController.deleteAccount);
 router.post("/me/heartbeat", requireAuth, usersController.pingHeartbeat);
 router.get("/me/cities", requireAuth, usersController.listIndianCities);

@@ -200,6 +200,7 @@ async function main() {
 
     const viewerId = viewer.id;
     const { pool } = require("../config/db");
+    const { emitUnreadCountsUpdated } = require("../services/websocket.service");
     const { sendFriendRequest, sendCommentRequest } = require("../services/social.service");
 
     const results = [];
@@ -250,6 +251,7 @@ async function main() {
         } else {
           await sendFriendRequest(senderId, viewerId);
         }
+        emitUnreadCountsUpdated(viewerId).catch(() => {});
         sentCount += 1;
         results.push({
           index,

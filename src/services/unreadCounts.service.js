@@ -7,7 +7,7 @@ async function getUnreadCounts(userId) {
     return { unreadChats: 0, unreadNotifications: 0 };
   }
   const [unreadChats, unreadNotifications] = await Promise.all([
-    chatService.sumUnreadMessages(uid),
+    chatService.countThreadsAwaitingViewerReply(uid),
     socialService.countPendingIncomingFriendRequests(uid),
   ]);
   return {

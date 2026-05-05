@@ -20,6 +20,7 @@
     "seed:story:activity:demo": "node src/scripts/seedStoryActivityDemo.js",
     "seed:story:reel:multi": "node src/scripts/seedMultiUserStoryReelForViewerPhone.js",
     "seed:story:reel:genders": "node src/scripts/seedStoryReelGendersForViewerPhone.js",
+    "seed:story:one-pref:viewer": "node src/scripts/seedOnePreferenceStoryForViewerPhone.js",
     "seed:story:interactions": "node src/scripts/seedStoryInteractionsForOwnerPhone.js",
     "dev:clear-stories": "node src/scripts/clearAllActiveStories.js",
     "dev:reset-user": "node src/scripts/resetUserByPhone.js",

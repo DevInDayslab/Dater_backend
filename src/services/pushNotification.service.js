@@ -63,6 +63,20 @@ function buildDataPayload({
   return out;
 }
 
+async function resolveActorPrimaryPhotoReadUrl(row) {
+  const s3Key = String(row.primary_photo_s3_key || "").trim();
+  if (s3Key && !s3Key.includes("..")) {
+    try {
+      return await s3Media.getPresignedGetUrl({ key: s3Key, expiresInSeconds: 3600 });
+    } catch {
+      /* fall through */
+    }
+  }
+  const rawUrl = String(row.primary_photo_url || "").trim();
+  const signedOrPassthrough = await s3Media.presignReadIfOurS3Object(rawUrl);
+  return String(signedOrPassthrough || "").trim();
+}
+
 async function loadActorPayload(actorUserId) {
   const actorId = String(actorUserId || "").trim();
   if (!actorId) return {};
@@ -72,23 +86,25 @@ async function loadActorPayload(actorUserId) {
             u.hide_my_name,
             u.age_years,
             u.is_verified,
-            (
-              SELECT up.photo_url
-              FROM user_photos up
-              WHERE up.user_id = u.id
-                AND up.deleted_at IS NULL
-                AND up.moderation_status = 'APPROVED'
-              ORDER BY up.is_primary DESC, up.photo_order ASC, up.created_at ASC
-              LIMIT 1
-            ) AS primary_photo_url
+            ph.photo_url AS primary_photo_url,
+            ph.s3_key AS primary_photo_s3_key
      FROM users u
+     LEFT JOIN LATERAL (
+       SELECT up.photo_url, up.s3_key
+       FROM user_photos up
+       WHERE up.user_id = u.id
+         AND up.deleted_at IS NULL
+         AND up.moderation_status = 'APPROVED'
+       ORDER BY up.is_primary DESC, up.photo_order ASC, up.created_at ASC
+       LIMIT 1
+     ) ph ON TRUE
      WHERE u.id = $1
      LIMIT 1`,
     [actorId]
   );
   const row = actorRes.rows[0];
   if (!row) return {};
-  const actorPhotoUrl = await s3Media.presignReadIfOurS3Object(String(row.primary_photo_url || "").trim());
+  const actorPhotoUrl = await resolveActorPrimaryPhotoReadUrl(row);
   const rawName = String(row.name || "").trim();
   const actorAgeYears =
     row.age_years != null && Number.isFinite(Number(row.age_years)) ? Number(row.age_years) : null;
