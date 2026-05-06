@@ -204,6 +204,8 @@ async function listThreads(viewerId, { sort = "RECENT", search = "" } = {}) {
             ) AS has_reply_badge,
             COALESCE(pref.is_muted, false) AS is_muted,
             COALESCE(s.relationship_state::text, 'ACTIVE') AS relationship_state,
+            s.relationship_state_set_at AS relationship_state_set_at,
+            s.relationship_state_expires_at AS relationship_state_expires_at,
             COALESCE(s.pinned_to_bottom, false) AS pinned_to_bottom,
             s.can_view_profile,
             (
@@ -311,6 +313,12 @@ async function listThreads(viewerId, { sort = "RECENT", search = "" } = {}) {
       hasReplyBadge: row.has_reply_badge === true,
       isMuted: row.is_muted === true,
       relationshipState: row.relationship_state || "ACTIVE",
+      relationshipStateSetAt: row.relationship_state_set_at
+        ? new Date(row.relationship_state_set_at).toISOString()
+        : null,
+      relationshipStateExpiresAt: row.relationship_state_expires_at
+        ? new Date(row.relationship_state_expires_at).toISOString()
+        : null,
       canViewProfile: row.can_view_profile !== false,
       hasStoryActive: row.has_story_active === true,
       viewerHasUnseenStory: row.story_ring_has_unseen === true,
@@ -352,7 +360,7 @@ async function unfriendByThread(viewerId, threadId) {
      SET relationship_state = 'CHAT_ENDED',
          relationship_state_set_at = NOW(),
          relationship_state_expires_at = NOW() + INTERVAL '3 days',
-         can_report = false,
+         can_report = true,
          can_view_profile = false,
          pinned_to_bottom = true,
          is_deleted_from_inbox = false,
