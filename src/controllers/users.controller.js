@@ -11,6 +11,7 @@ const socialService = require("../services/social.service");
 const accountLifecycle = require("../services/accountLifecycle.service");
 const { emitUnreadCountsUpdated } = require("../services/websocket.service");
 const unreadCountsService = require("../services/unreadCounts.service");
+const { effectiveNewHereUntilMs, isNewHereBadgeActive } = require("../utils/newHereBadge");
 
 function normalizeStringArray(value) {
   if (!Array.isArray(value)) return null;
@@ -413,16 +414,10 @@ async function getMe(req, res) {
     );
 
     const nextRoute = resolveUserAppRoute(user);
-    const createdAtMs = user.created_at ? new Date(user.created_at).getTime() : null;
-    const existingNewHereUntilMs = user.new_here_until ? new Date(user.new_here_until).getTime() : null;
-    const fallbackNewHereUntilMs =
-      Number.isFinite(createdAtMs) ? createdAtMs + 72 * 60 * 60 * 1000 : null;
-    const effectiveNewHereUntilMs =
-      Number.isFinite(existingNewHereUntilMs) ? existingNewHereUntilMs : fallbackNewHereUntilMs;
-    const isNewHere =
-      Number.isFinite(effectiveNewHereUntilMs) && Date.now() < effectiveNewHereUntilMs;
-    const newHereUntilIso = Number.isFinite(effectiveNewHereUntilMs)
-      ? new Date(effectiveNewHereUntilMs).toISOString()
+    const effNewHereUntilMs = effectiveNewHereUntilMs(user);
+    const isNewHere = isNewHereBadgeActive(user);
+    const newHereUntilIso = Number.isFinite(effNewHereUntilMs)
+      ? new Date(effNewHereUntilMs).toISOString()
       : null;
 
     const pendingSess = await query(

@@ -12,6 +12,7 @@ const { displayNameForPrivacy } = require("../utils/displayName");
 const { normalizeExpiredPauseForUser } = require("./accountLifecycle.service");
 const s3Media = require("./s3Media.service");
 const { resolveIndiaBrowseAnchor, getIndiaBrowseAnchorUnnestArrays } = require("./geocoder.service");
+const { isNewHereBadgeActive } = require("../utils/newHereBadge");
 
 const FEED_PAGE_SIZE_DEFAULT = 20;
 const FEED_PAGE_SIZE_MAX = 25;
@@ -304,6 +305,7 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
               c.profile_completion_percentage,
               c.last_active_at,
               c.new_here_until,
+              c.created_at,
               c.living_in_city,
               COALESCE(pb.boost_active, FALSE) AS boost_active,
               CASE
@@ -367,7 +369,10 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
                     ELSE 0
                   END
                 + LEAST(COALESCE(c.profile_completion_percentage, 0), 100) * 0.3
-                + CASE WHEN c.new_here_until IS NOT NULL AND c.new_here_until > NOW() THEN 10 ELSE 0 END
+                + CASE WHEN (
+                    (c.new_here_until IS NOT NULL AND c.new_here_until > NOW())
+                    OR (c.created_at IS NOT NULL AND c.created_at + INTERVAL '72 hours' > NOW())
+                  ) THEN 10 ELSE 0 END
                 + CASE WHEN c.is_premium THEN 15 ELSE 0 END
               ) AS score,
               (
@@ -678,6 +683,7 @@ ${advMatchEthnicityAnd}
          profile_completion_percentage,
          last_active_at,
          new_here_until,
+         created_at,
          living_in_city,
          boost_active,
          distance_km,
@@ -701,6 +707,7 @@ ${advMatchEthnicityAnd}
          cs.profile_completion_percentage,
          cs.last_active_at,
          cs.new_here_until,
+         cs.created_at,
          cs.living_in_city,
          cs.boost_active,
          cs.distance_km,
@@ -808,7 +815,10 @@ ${advMatchEthnicityAnd}
       distanceKm: row.distance_km == null ? null : Number(Number(row.distance_km).toFixed(1)),
       score: Number(Number(row.score || 0).toFixed(2)),
       suggestedScore: Number(row.suggested_score || 0),
-      isNewHere: row.new_here_until != null && new Date(row.new_here_until).getTime() > Date.now(),
+      isNewHere: isNewHereBadgeActive({
+        new_here_until: row.new_here_until,
+        created_at: row.created_at,
+      }),
       livingInCity: row.living_in_city || "",
       relationshipState: buildRelationshipState({
         is_friend: row.is_friend === true,

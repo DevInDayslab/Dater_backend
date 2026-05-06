@@ -287,8 +287,10 @@ async function getOrCreateUserByPhone(phoneE164, { ipAddress, deviceId, userAgen
     `INSERT INTO users
       (phone_country_code, phone_number, phone_e164, is_phone_verified, onboarding_step, onboarding_updated_at,
        terms_accepted_at, privacy_accepted_at, consent_source,
-       account_created_ip_address, account_created_device_id, account_created_user_agent)
-     VALUES ('+91', $1, $2, TRUE, 'onboarding_name', NOW(), $3, $3, $4, $5, $6, $7)
+       account_created_ip_address, account_created_device_id, account_created_user_agent,
+       new_here_until)
+     VALUES ('+91', $1, $2, TRUE, 'onboarding_name', NOW(), $3, $3, $4, $5, $6, $7,
+       NOW() + INTERVAL '72 hours')
      RETURNING id, phone_e164, onboarding_completed_at, onboarding_step, onboarding_updated_at, account_state, underage_until`,
     [
       phoneNumber,

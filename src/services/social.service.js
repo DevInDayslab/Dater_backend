@@ -4,6 +4,7 @@ const s3Media = require("./s3Media.service");
 const profileMeExtension = require("./profileMeExtension.service");
 const entitlementsService = require("./entitlements.service");
 const { displayNameForPrivacy, formatNotificationPersonTitle } = require("../utils/displayName");
+const { isNewHereBadgeActive } = require("../utils/newHereBadge");
 const { sendEventDataNotification } = require("./pushNotification.service");
 
 const ONLINE_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
@@ -217,7 +218,7 @@ async function getPublicProfile(viewerId, targetUserId, { source = "FEED", consu
   }
   const targetRes = await query(
     `SELECT u.id, u.account_state, u.name, u.hide_my_name, u.age_years, u.gender, u.show_gender_on_profile,
-            u.marital_status, u.is_verified, u.new_here_until, u.bio, u.preset_message,
+            u.marital_status, u.is_verified, u.new_here_until, u.created_at, u.bio, u.preset_message,
             u.height_inches, u.drinking, u.smoking, u.exercise, u.religion, u.education,
             u.star_sign, u.kids, u.political_leanings, u.pets, u.ethnicity,
             u.occupation_job_title, u.occupation_company, u.education_institution_name,
@@ -328,7 +329,7 @@ async function getPublicProfile(viewerId, targetUserId, { source = "FEED", consu
     gender: user.show_gender_on_profile === false ? "" : user.gender || "",
     status: user.marital_status || "",
     verified: user.is_verified === true,
-    isNewHere: Boolean(user.new_here_until && new Date(user.new_here_until).getTime() > Date.now()),
+    isNewHere: isNewHereBadgeActive(user),
     relationshipState: buildRelationshipState(user),
     photoUrls: approvedPhotoRows.map((p) => p.photo_url).filter(Boolean),
     bio: profileEdit.bio || "",
