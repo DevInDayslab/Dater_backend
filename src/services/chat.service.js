@@ -510,6 +510,21 @@ async function listThreadMessages(viewerId, threadId, { limit = 50, before = nul
   );
 }
 
+/** True if recipient has muted this sender (WhatsApp-style: no push / FCM for that thread peer). */
+async function recipientHasMutedSender(recipientUserId, senderUserId) {
+  const recipient = String(recipientUserId || "").trim();
+  const sender = String(senderUserId || "").trim();
+  if (!recipient || !sender || recipient === sender) return false;
+  const res = await query(
+    `SELECT COALESCE(pref.is_muted, false) AS is_muted
+     FROM chat_user_pair_preferences pref
+     WHERE pref.user_id = $1::uuid AND pref.target_id = $2::uuid
+     LIMIT 1`,
+    [recipient, sender]
+  );
+  return res.rows[0]?.is_muted === true;
+}
+
 async function sendMessage(viewerId, threadId, text, replyToMessageId = "") {
   const body = String(text || "").trim();
   if (!body) {
@@ -630,15 +645,24 @@ async function sendMessage(viewerId, threadId, text, replyToMessageId = "") {
     );
     await client.query("COMMIT");
     if (peerUserId) {
-      sendEventDataNotification({
-        recipientUserId: peerUserId,
-        actorUserId: viewerId,
-        eventType: "CHAT_DM",
-        title: pushTitle,
-        body: body,
-        chatId: threadId,
-        extraData: { senderId: viewerId },
-      }).catch(() => {});
+      (async () => {
+        let muted = false;
+        try {
+          muted = await recipientHasMutedSender(peerUserId, viewerId);
+        } catch (_) {
+          muted = false;
+        }
+        if (muted) return;
+        sendEventDataNotification({
+          recipientUserId: peerUserId,
+          actorUserId: viewerId,
+          eventType: "CHAT_DM",
+          title: pushTitle,
+          body: body,
+          chatId: threadId,
+          extraData: { senderId: viewerId },
+        }).catch(() => {});
+      })();
     }
     return {
       id: message.id,
