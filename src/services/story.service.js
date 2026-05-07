@@ -718,10 +718,25 @@ async function getMeStorySummary(userId) {
        )`,
     [userId]
   );
+  const totalActivity = await query(
+    `SELECT COUNT(*)::int AS c
+     FROM story_interactions si
+     INNER JOIN stories s ON s.id = si.story_id
+     WHERE s.user_id = $1::uuid
+       AND s.deleted_at IS NULL
+       AND s.expires_at > NOW()
+       AND si.actor_user_id <> $1::uuid
+       AND (
+         si.interaction_type IN ('LIKE', 'COMMENT')
+         OR (si.interaction_type = 'VIEW' AND COALESCE(si.show_in_activity_list, true) = true)
+       )`,
+    [userId]
+  );
   return {
     hasActiveStory: Number(active.rows[0]?.c || 0) > 0,
     activeStoryCount: Number(active.rows[0]?.c || 0),
     unreadInteractionCount: Number(unread.rows[0]?.c || 0),
+    totalInteractionCount: Number(totalActivity.rows[0]?.c || 0),
   };
 }
 
