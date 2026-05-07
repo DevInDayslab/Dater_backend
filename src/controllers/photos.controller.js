@@ -29,6 +29,13 @@ function isS3ObjectMissingError(err) {
   return false;
 }
 
+function photoUrlIdentity(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const q = s.indexOf("?");
+  return (q >= 0 ? s.slice(0, q) : s).trim();
+}
+
 /**
  * POST /me/photos/presign
  * Body: { photoOrder: number, blurHash?: string } — 1..6, slot order (1 = front / primary).
@@ -443,13 +450,14 @@ async function reorderPhotos(req, res) {
     const orderedPhotoUrls = Array.isArray(req.body?.orderedPhotoUrls)
       ? req.body.orderedPhotoUrls.map((v) => String(v || "").trim()).filter(Boolean)
       : [];
-    if (orderedPhotoUrls.length < 1 || orderedPhotoUrls.length > 6) {
+    const orderedIdentities = orderedPhotoUrls.map(photoUrlIdentity).filter(Boolean);
+    if (orderedIdentities.length < 1 || orderedIdentities.length > 6) {
       return res.status(400).json({
         success: false,
         message: "orderedPhotoUrls must contain between 1 and 6 URLs",
       });
     }
-    if (new Set(orderedPhotoUrls).size !== orderedPhotoUrls.length) {
+    if (new Set(orderedIdentities).size !== orderedIdentities.length) {
       return res.status(400).json({
         success: false,
         message: "orderedPhotoUrls must not contain duplicates",
@@ -465,16 +473,24 @@ async function reorderPhotos(req, res) {
       [userId]
     );
     const existing = existingRes.rows;
-    if (existing.length !== orderedPhotoUrls.length) {
+    if (existing.length !== orderedIdentities.length) {
       return res.status(400).json({
         success: false,
         message: "orderedPhotoUrls count must match active photos count",
       });
     }
-    const existingByUrl = new Map(existing.map((r) => [String(r.photo_url || "").trim(), r.id]));
+    const existingByIdentity = new Map(
+      existing.map((r) => [photoUrlIdentity(r.photo_url), r.id]).filter(([k]) => Boolean(k))
+    );
+    if (existingByIdentity.size !== existing.length) {
+      return res.status(400).json({
+        success: false,
+        message: "Server photos contain duplicate identities; cannot reorder safely",
+      });
+    }
     const orderedIds = [];
-    for (const url of orderedPhotoUrls) {
-      const id = existingByUrl.get(url);
+    for (const identity of orderedIdentities) {
+      const id = existingByIdentity.get(identity);
       if (!id) {
         return res.status(400).json({
           success: false,
