@@ -433,8 +433,110 @@ async function deletePhotoByOrder(req, res) {
   }
 }
 
+/**
+ * POST /me/photos/reorder
+ * Body: { orderedPhotoUrls: string[] } — full ordered active list (front first).
+ */
+async function reorderPhotos(req, res) {
+  try {
+    const userId = req.auth.userId;
+    const orderedPhotoUrls = Array.isArray(req.body?.orderedPhotoUrls)
+      ? req.body.orderedPhotoUrls.map((v) => String(v || "").trim()).filter(Boolean)
+      : [];
+    if (orderedPhotoUrls.length < 1 || orderedPhotoUrls.length > 6) {
+      return res.status(400).json({
+        success: false,
+        message: "orderedPhotoUrls must contain between 1 and 6 URLs",
+      });
+    }
+    if (new Set(orderedPhotoUrls).size !== orderedPhotoUrls.length) {
+      return res.status(400).json({
+        success: false,
+        message: "orderedPhotoUrls must not contain duplicates",
+      });
+    }
+
+    const existingRes = await query(
+      `SELECT id, photo_url
+       FROM user_photos
+       WHERE user_id = $1
+         AND deleted_at IS NULL
+       ORDER BY photo_order ASC, uploaded_at ASC, id ASC`,
+      [userId]
+    );
+    const existing = existingRes.rows;
+    if (existing.length !== orderedPhotoUrls.length) {
+      return res.status(400).json({
+        success: false,
+        message: "orderedPhotoUrls count must match active photos count",
+      });
+    }
+    const existingByUrl = new Map(existing.map((r) => [String(r.photo_url || "").trim(), r.id]));
+    const orderedIds = [];
+    for (const url of orderedPhotoUrls) {
+      const id = existingByUrl.get(url);
+      if (!id) {
+        return res.status(400).json({
+          success: false,
+          message: "orderedPhotoUrls must exactly match active server photos",
+        });
+      }
+      orderedIds.push(id);
+    }
+
+    await query("BEGIN");
+    try {
+      // Step 1: bump current orders to avoid unique collisions.
+      await query(
+        `UPDATE user_photos
+         SET photo_order = photo_order + 100
+         WHERE user_id = $1
+           AND deleted_at IS NULL`,
+        [userId]
+      );
+
+      // Step 2: assign new order by provided array position.
+      const caseClauses = orderedIds.map((id, idx) => `WHEN '${id}'::uuid THEN ${idx + 1}`).join(" ");
+      await query(
+        `UPDATE user_photos
+         SET photo_order = CASE id ${caseClauses} ELSE photo_order END,
+             is_primary = FALSE
+         WHERE user_id = $1
+           AND deleted_at IS NULL
+           AND id = ANY($2::uuid[])`,
+        [userId, orderedIds]
+      );
+      await query(
+        `UPDATE user_photos
+         SET is_primary = (photo_order = 1)
+         WHERE user_id = $1
+           AND deleted_at IS NULL`,
+        [userId]
+      );
+      await query("COMMIT");
+    } catch (e) {
+      await query("ROLLBACK");
+      throw e;
+    }
+
+    debugLog("photos_reordered", { userId, photoCount: orderedIds.length });
+    return res.status(200).json({
+      success: true,
+      message: "Photos reordered",
+      data: { photoCount: orderedIds.length },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to reorder photos",
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   presignPhotoUpload,
   confirmPhotoUpload,
   deletePhotoByOrder,
+  reorderPhotos,
 };

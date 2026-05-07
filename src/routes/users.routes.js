@@ -45,5 +45,6 @@ router.post("/me/verify-liveness/complete", requireAuth, usersController.complet
 router.post("/me/photos/presign", requireAuth, photosController.presignPhotoUpload);
 router.post("/me/photos/:photoId/confirm", requireAuth, photosController.confirmPhotoUpload);
 router.post("/me/photos/delete", requireAuth, photosController.deletePhotoByOrder);
+router.post("/me/photos/reorder", requireAuth, photosController.reorderPhotos);
 
 module.exports = router;

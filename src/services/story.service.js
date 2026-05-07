@@ -718,7 +718,7 @@ async function getMeStorySummary(userId) {
        )`,
     [userId]
   );
-  const totalActivity = await query(
+  const total = await query(
     `SELECT COUNT(*)::int AS c
      FROM story_interactions si
      INNER JOIN stories s ON s.id = si.story_id
@@ -736,7 +736,7 @@ async function getMeStorySummary(userId) {
     hasActiveStory: Number(active.rows[0]?.c || 0) > 0,
     activeStoryCount: Number(active.rows[0]?.c || 0),
     unreadInteractionCount: Number(unread.rows[0]?.c || 0),
-    totalInteractionCount: Number(totalActivity.rows[0]?.c || 0),
+    totalInteractionCount: Number(total.rows[0]?.c || 0),
   };
 }
 

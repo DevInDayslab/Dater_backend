@@ -373,8 +373,8 @@ async function getMe(req, res) {
       });
     }
 
-    // `living_in_city` is manual profile text only (never GPS). Top-level `browseLocationCity` mirrors feed/
-    // filters: premium preferred_location_city (via profileEdit), else nearestIndianCityLabel(GPS).
+    // `living_in_city` is manual profile text only (never GPS). Browse/filter labels use coordinates +
+    // geocoder (`browseLocationCity`) or premium `user_filters.preferred_location_city`.
 
     await photoMaintenance.expireStalePendingPhotosForUser(userId);
     await photoMaintenance.normalizePhotoOrdersForUser(userId);
@@ -430,21 +430,12 @@ async function getMe(req, res) {
     const verificationPending = Boolean(pendingSess.rows[0]?.pending);
     const filters = await loadUserFiltersSnapshot(userId);
 
-    // Same rule as feed/social: premium switch city → label from stored GPS (never profile living_in_city).
-    const prefBrowse =
-      profileEdit && typeof profileEdit.preferredLocationCity === "string"
-        ? String(profileEdit.preferredLocationCity).trim()
-        : "";
     let browseLocationCity = "";
-    if (prefBrowse) {
-      browseLocationCity = prefBrowse;
-    } else {
-      const brLat = user.location_latitude;
-      const brLng = user.location_longitude;
-      if (Number.isFinite(Number(brLat)) && Number.isFinite(Number(brLng))) {
-        const gs = geocoderService.getCityAndState(Number(brLat), Number(brLng));
-        browseLocationCity = gs?.cityStateLabel ? String(gs.cityStateLabel).trim() : "";
-      }
+    const brLat = user.location_latitude;
+    const brLng = user.location_longitude;
+    if (Number.isFinite(Number(brLat)) && Number.isFinite(Number(brLng))) {
+      const gs = geocoderService.getCityAndState(Number(brLat), Number(brLng));
+      browseLocationCity = gs?.cityStateLabel ? String(gs.cityStateLabel).trim() : "";
     }
 
     return res.status(200).json({
