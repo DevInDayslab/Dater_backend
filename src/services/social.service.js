@@ -3,11 +3,26 @@ const moderationReports = require("./moderationReports.service");
 const s3Media = require("./s3Media.service");
 const profileMeExtension = require("./profileMeExtension.service");
 const entitlementsService = require("./entitlements.service");
+const geocoderService = require("./geocoder.service");
 const { displayNameForPrivacy, formatNotificationPersonTitle } = require("../utils/displayName");
 const { isNewHereBadgeActive } = require("../utils/newHereBadge");
 const { sendEventDataNotification } = require("./pushNotification.service");
 
 const ONLINE_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
+
+/** Browse/switch-city label: premium preferred → GPS nearest-city label — never profile `living_in_city`. */
+function mapBrowseCityLabelFromRow(row) {
+  const pref = String(row.preferred_location_city || "").trim();
+  if (pref) return pref;
+  const lat = row.location_latitude;
+  const lng = row.location_longitude;
+  if (Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) {
+    const gs = geocoderService.getCityAndState(Number(lat), Number(lng));
+    const label = gs?.cityStateLabel ? String(gs.cityStateLabel).trim() : "";
+    if (label) return label;
+  }
+  return "";
+}
 
 /** Free tier: full profile opens tracked in profile_view_events; sliding window. */
 const FREE_TIER_PROFILE_VIEW_LIMIT = 20;
@@ -223,6 +238,8 @@ async function getPublicProfile(viewerId, targetUserId, { source = "FEED", consu
             u.star_sign, u.kids, u.political_leanings, u.pets, u.ethnicity,
             u.occupation_job_title, u.occupation_company, u.education_institution_name,
             u.education_passing_year, u.living_in_city, u.home_town_city, u.living_in_city_mode,
+            ST_Y(u.location::geometry) AS location_latitude,
+            ST_X(u.location::geometry) AS location_longitude,
             (SELECT uf.preferred_location_city
                FROM user_filters uf
               WHERE uf.user_id = u.id
@@ -315,12 +332,12 @@ async function getPublicProfile(viewerId, targetUserId, { source = "FEED", consu
     .map((v) => String(v || "").trim())
     .filter(Boolean)
     .join(" at ");
-  const prefCity = String(user.preferred_location_city || "").trim();
-  const mapCityLine =
-    user.living_in_city_mode === "MANUAL_SWITCH"
-      ? prefCity || String(user.living_in_city || "").trim()
-      : String(user.living_in_city || "").trim();
-  const livesInLabel = user.living_in_city ? `Lives in ${user.living_in_city}` : "";
+  const mapCityLine = mapBrowseCityLabelFromRow(user);
+  const manualLiving = String(user.living_in_city || "").trim();
+  const livesInLabel =
+    user.living_in_city_mode === "MANUAL_SWITCH" && manualLiving
+      ? `Lives in ${manualLiving}`
+      : "";
 
   return {
     userId: user.id,
@@ -774,7 +791,8 @@ async function listFriends(viewerId, { sort = "NEARBY" } = {}) {
             u.hide_my_name,
             u.age_years AS age,
             u.is_verified AS verified,
-            u.living_in_city,
+            ST_Y(u.location::geometry) AS location_latitude,
+            ST_X(u.location::geometry) AS location_longitude,
             u.last_active_at,
             f.created_at AS friends_since,
             EXISTS (
@@ -830,7 +848,7 @@ async function listFriends(viewerId, { sort = "NEARBY" } = {}) {
       name: displayNameForPrivacy(row.name, row.hide_my_name === true),
       age: row.age != null ? Number(row.age) : 0,
       verified: row.verified === true,
-      location: row.living_in_city || "",
+      location: mapBrowseCityLabelFromRow(row),
       distanceKm: row.distance_km != null ? Number(row.distance_km) : null,
       friendsSince: row.friends_since ? new Date(row.friends_since).toISOString() : null,
       primaryPhotoUrl: await normalizePrimaryPhotoUrl(row.primary_photo_url),

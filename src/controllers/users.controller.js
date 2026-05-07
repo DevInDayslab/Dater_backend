@@ -373,8 +373,8 @@ async function getMe(req, res) {
       });
     }
 
-    // Profile "Living in" manual selection uses MANUAL_SWITCH so GPS pings do not overwrite the label.
-    // Premium-only browse city remains gated via user_filters.preferred_location_city (updateMyFilters).
+    // `living_in_city` is manual profile text only (never GPS). Top-level `browseLocationCity` mirrors feed/
+    // filters: premium preferred_location_city (via profileEdit), else nearestIndianCityLabel(GPS).
 
     await photoMaintenance.expireStalePendingPhotosForUser(userId);
     await photoMaintenance.normalizePhotoOrdersForUser(userId);
@@ -430,6 +430,23 @@ async function getMe(req, res) {
     const verificationPending = Boolean(pendingSess.rows[0]?.pending);
     const filters = await loadUserFiltersSnapshot(userId);
 
+    // Same rule as feed/social: premium switch city → label from stored GPS (never profile living_in_city).
+    const prefBrowse =
+      profileEdit && typeof profileEdit.preferredLocationCity === "string"
+        ? String(profileEdit.preferredLocationCity).trim()
+        : "";
+    let browseLocationCity = "";
+    if (prefBrowse) {
+      browseLocationCity = prefBrowse;
+    } else {
+      const brLat = user.location_latitude;
+      const brLng = user.location_longitude;
+      if (Number.isFinite(Number(brLat)) && Number.isFinite(Number(brLng))) {
+        const gs = geocoderService.getCityAndState(Number(brLat), Number(brLng));
+        browseLocationCity = gs?.cityStateLabel ? String(gs.cityStateLabel).trim() : "";
+      }
+    }
+
     return res.status(200).json({
       success: true,
       message: "User profile fetched",
@@ -448,6 +465,7 @@ async function getMe(req, res) {
         pausedUntil: user.paused_until ? new Date(user.paused_until).toISOString() : null,
         locationGranted: user.location_granted,
         livingInCity: user.living_in_city,
+        browseLocationCity,
         livingInCityMode: user.living_in_city_mode || "FOLLOW_DEVICE",
         notificationsGranted: user.notifications_granted,
         nextRoute,
@@ -1127,7 +1145,6 @@ async function updateProfileCore(req, res) {
       locationGranted,
       dateOfBirth,
       ageYears,
-      suppressLivingInAutofill,
       livingInCityMode,
     } = body;
     if (hasOwn(body, "name")) {
@@ -1150,7 +1167,7 @@ async function updateProfileCore(req, res) {
     const hasCoordinates =
       Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude));
     const currentUserRes = await query(
-      `SELECT living_in_city_mode
+      `SELECT 1 AS ok
        FROM users
        WHERE id = $1
        LIMIT 1`,
@@ -1162,7 +1179,6 @@ async function updateProfileCore(req, res) {
         message: "User not found",
       });
     }
-    const currentLivingInCityMode = currentUserRes.rows[0].living_in_city_mode || "FOLLOW_DEVICE";
     const requestedLivingInCityMode = hasOwn(body, "livingInCityMode")
       ? normalizeLivingInCityMode(livingInCityMode)
       : null;
@@ -1172,7 +1188,6 @@ async function updateProfileCore(req, res) {
         message: "livingInCityMode must be FOLLOW_DEVICE or MANUAL_SWITCH",
       });
     }
-    const effectiveLivingInCityMode = requestedLivingInCityMode || currentLivingInCityMode;
 
     const shouldPersistLocation = locationGranted === true && hasCoordinates;
     const cityState = shouldPersistLocation
@@ -1290,13 +1305,6 @@ async function updateProfileCore(req, res) {
       setClauses.push(
         `location = ST_SetSRID(ST_MakePoint($${values.length - 1}::double precision, $${values.length}::double precision), 4326)`
       );
-      if (
-        !hasOwn(body, "livingInCity") &&
-        effectiveLivingInCityMode === "FOLLOW_DEVICE" &&
-        suppressLivingInAutofill !== true
-      ) {
-        addSet("living_in_city", cityState?.cityStateLabel ?? null);
-      }
     }
     setClauses.push("updated_at = NOW()");
 

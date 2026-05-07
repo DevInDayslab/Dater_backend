@@ -103,15 +103,12 @@ This file captures the finalized business rules and schema intent so Node.js imp
 - `bio`, `preset_message`
 - `profile_updated_at`
 
-### Current City Premium Logic
+### Living in, hometown, and browse location
 
-- `home_town_city` is a plain profile label with no premium gating and no automatic refresh.
-- `living_in_city` supports two modes via `users.living_in_city_mode`:
-  - `FOLLOW_DEVICE`: boot/device location updates can refresh `living_in_city` from reverse geocode.
-  - `MANUAL_SWITCH`: premium city-switch selection; boot location updates must not overwrite `living_in_city`.
-- Premium expiry fallback:
-  - when a user is no longer premium and mode is `MANUAL_SWITCH`, backend downgrades mode to
-    `FOLLOW_DEVICE` and restores `living_in_city` from latest known coordinates (if available).
+- `home_town_city` — profile-only; never written by GPS or geocoder.
+- `living_in_city` — profile-only **manual** label when the user saves it (typically `living_in_city_mode === MANUAL_SWITCH`). GPS pings **do not** write or overwrite this column (`PATCH profile-core`).
+- `living_in_city_mode` — `FOLLOW_DEVICE` means “not pinning a manual profile city”; `MANUAL_SWITCH` means the user chose a city for the profile bubble.
+- Browse / feed / map **labels** use `user_filters.preferred_location_city` when set (premium switch city), otherwise reverse-geocode from stored `users.location` via `india_cities.json` (same helper as the server geocoder). GET `/me` exposes this as `browseLocationCity` so clients never confuse profile text with GPS.
 
 ### Profile Multi-Select Tables
 
@@ -128,7 +125,7 @@ This file captures the finalized business rules and schema intent so Node.js imp
   - `age_min`, `age_max`
   - `expand_age_range`, `expand_distance`
   - `only_verified_profiles`
-  - `preferred_location_city` (schema field; **premium switch-city** and geocoder do **not** populate this in the current API — display city uses `users.living_in_city` from reverse geocode where implemented)
+  - `preferred_location_city` (**premium** switch-city for feed/browse anchor; separate from profile `living_in_city`)
 - Advanced scalar:
   - `min_height_inches`, `max_height_inches`
   - `show_other_people_if_run_out`

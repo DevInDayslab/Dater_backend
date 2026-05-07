@@ -115,9 +115,8 @@ const mockPeopleImagesDir = path.join(
   "app",
   "src",
   "main",
-  "res",
-  "drawable",
-  "mock-people-images"
+  "assets",
+  "mock_people_images"
 );
 const mockPeopleImageFiles = (() => {
   try {
@@ -133,7 +132,7 @@ const mockPeopleImageFiles = (() => {
 if (mockPeopleImageFiles.length === 0) {
   throw new Error(
     `No seed images found in ${mockPeopleImagesDir}. ` +
-      "Seeding is restricted to mock-people-images assets only."
+      "Add .jpg/.webp/.png files under DaterApp/app/src/main/assets/mock_people_images/"
   );
 }
 
@@ -361,7 +360,7 @@ async function upsertCompatibleCandidate(client, viewer, index, options = {}) {
   if (pickedSeedFiles.length < 2) {
     throw new Error(
       "Insufficient mock seed images to assign two photos per profile. " +
-        "Please add more files to mock-people-images."
+        "Please add more image files to app/src/main/assets/mock_people_images/."
     );
   }
   const first = await uploadSeedPhotoToS3({ userId, filename: pickedSeedFiles[0] });
@@ -730,7 +729,7 @@ async function mainFeedSeed() {
           requestedCandidates: candidateCount,
           seededCandidates: created.length,
           media: {
-            source: mockPeopleImageFiles.length > 0 ? "mock-people-images->s3" : "randomuser-fallback",
+            source: mockPeopleImageFiles.length > 0 ? "assets/mock_people_images->s3" : "randomuser-fallback",
             count: mockPeopleImageFiles.length,
             s3Bucket: s3Media.s3Bucket,
             s3Region: s3Media.s3Region,
