@@ -3,6 +3,8 @@ const cors = require("cors");
 const helmet = require("helmet");
 
 const authRoutes = require("./routes/auth.routes");
+const { requireAuth } = require("./middleware/auth.middleware");
+const storyController = require("./controllers/story.controller");
 const usersRoutes = require("./routes/users.routes");
 const entitlementsRoutes = require("./routes/entitlements.routes");
 const feedRoutes = require("./routes/feed.routes");
@@ -18,6 +20,13 @@ app.use(express.json());
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "API is running fast" });
 });
+
+// Mirrors GET /api/v1/stories/notification-peer/:peerUserId under /users/me/notifications for restrictive gateways.
+app.get(
+  "/api/v1/users/me/notifications/story-reel/:peerUserId",
+  requireAuth,
+  storyController.listNotificationPeerReel
+);
 
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/users", usersRoutes);

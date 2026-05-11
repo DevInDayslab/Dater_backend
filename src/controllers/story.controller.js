@@ -45,6 +45,23 @@ async function listReel(req, res) {
   }
 }
 
+async function listNotificationPeerReel(req, res) {
+  try {
+    const viewerId = req.auth.userId;
+    const peerUserId = String(req.params.peerUserId || "").trim();
+    const data = await storyService.listStoryReelForNotificationPeer(viewerId, peerUserId);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    const code = error.code || "NOTIFICATION_PEER_REEL_FAILED";
+    const status = code === "PEER_INVALID" ? 400 : 500;
+    return res.status(status).json({
+      success: false,
+      code,
+      message: error.message || "Failed to load peer story reel",
+    });
+  }
+}
+
 async function recordView(req, res) {
   try {
     const userId = req.auth.userId;
@@ -288,6 +305,7 @@ module.exports = {
   presignUpload,
   createStory,
   listReel,
+  listNotificationPeerReel,
   listMine,
   getMeSummary,
   markActivitySeen,

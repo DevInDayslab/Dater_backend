@@ -1325,6 +1325,127 @@ ${advMatchEthnicityAnd}
   return { users };
 }
 
+/**
+ * Single-peer reel for notification deep-links when the sender is omitted from the feed-filtered home reel.
+ * Visibility matches story viewing rules (blocked hidden; FRIENDS_ONLY requires friendship; EVERYONE allowed).
+ */
+async function listStoryReelForNotificationPeer(viewerId, peerUserId) {
+  const peer = String(peerUserId || "").trim();
+  const uuidRe =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuidRe.test(peer)) {
+    const e = new Error("Invalid peer user id");
+    e.code = "PEER_INVALID";
+    throw e;
+  }
+  if (peer === viewerId) {
+    return { users: [] };
+  }
+
+  const res = await query(
+    `SELECT s.id AS story_id,
+            s.user_id,
+            s.media_url,
+            s.media_type::text AS media_type,
+            s.created_at,
+            s.expires_at,
+            u.name,
+            u.age_years,
+            u.is_verified,
+            u.hide_my_name,
+            (
+              SELECT up.photo_url FROM user_photos up
+              WHERE up.user_id = u.id AND up.deleted_at IS NULL
+              ORDER BY up.photo_order ASC
+              LIMIT 1
+            ) AS primary_photo_url,
+            EXISTS (
+              SELECT 1 FROM friendships f
+              WHERE (f.u1_id = $1::uuid AND f.u2_id = s.user_id)
+                 OR (f.u2_id = $1::uuid AND f.u1_id = s.user_id)
+            ) AS is_friend,
+            (
+              CASE
+                WHEN s.user_id = $1::uuid THEN EXISTS (
+                  SELECT 1 FROM story_self_views sv
+                  WHERE sv.story_id = s.id AND sv.owner_user_id = $1::uuid
+                )
+                ELSE EXISTS (
+                  SELECT 1 FROM story_interactions si
+                  WHERE si.story_id = s.id
+                    AND si.actor_user_id = $1::uuid
+                    AND si.interaction_type = 'VIEW'
+                )
+              END
+            ) AS viewed_by_viewer
+     FROM stories s
+     JOIN users u ON u.id = s.user_id
+     WHERE s.user_id = $2::uuid
+       AND s.deleted_at IS NULL
+       AND s.expires_at > NOW()
+       AND u.deleted_at IS NULL
+       AND u.account_state NOT IN ('DELETED', 'BANNED', 'UNDERAGE_BLOCKED')
+       AND NOT EXISTS (
+         SELECT 1 FROM blocks b
+         WHERE (b.blocker_id = $1::uuid AND b.blocked_id = s.user_id)
+            OR (b.blocker_id = s.user_id AND b.blocked_id = $1::uuid)
+       )
+       AND (
+         s.user_id = $1::uuid
+         OR EXISTS (
+           SELECT 1 FROM friendships f
+           WHERE (f.u1_id = $1::uuid AND f.u2_id = s.user_id)
+              OR (f.u2_id = $1::uuid AND f.u1_id = s.user_id)
+         )
+         OR COALESCE(s.audience, 'EVERYONE') = 'EVERYONE'
+       )
+     ORDER BY s.created_at ASC`,
+    [viewerId, peer]
+  );
+
+  if (res.rows.length === 0) {
+    return { users: [] };
+  }
+
+  const row0 = res.rows[0];
+  const uid = row0.user_id;
+  const entry = {
+    userId: uid,
+    name: displayNameForPrivacy(row0.name, row0.hide_my_name === true),
+    ageYears: row0.age_years != null ? Number(row0.age_years) : 0,
+    verified: row0.is_verified === true,
+    isFriend: row0.is_friend === true,
+    isSelf: uid === viewerId,
+    primaryPhotoUrl: await s3Media.presignReadIfOurS3Object(String(row0.primary_photo_url || "").trim()),
+    viewerHasUnseenStory: false,
+    stories: [],
+  };
+
+  for (const row of res.rows) {
+    const viewed = row.viewed_by_viewer === true;
+    entry.viewerHasUnseenStory = entry.viewerHasUnseenStory || !viewed;
+    entry.stories.push({
+      storyId: row.story_id,
+      mediaUrl: await s3Media.presignReadIfOurS3Object(row.media_url || ""),
+      mediaType: row.media_type,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+      expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
+      _viewedByViewer: viewed,
+    });
+  }
+  entry.stories.sort((a, b) => {
+    if (a._viewedByViewer !== b._viewedByViewer) {
+      return a._viewedByViewer ? 1 : -1;
+    }
+    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return ta - tb;
+  });
+  entry.stories = entry.stories.map(({ _viewedByViewer, ...rest }) => rest);
+
+  return { users: [entry] };
+}
+
 async function getViewerStoryState(viewerId, storyId) {
   const story = await loadStoryRow(storyId);
   await assertStoryViewableForViewer(viewerId, story);
@@ -1380,6 +1501,7 @@ module.exports = {
   createStoryFromUpload,
   presignStoryUpload,
   listStoryReelForViewer,
+  listStoryReelForNotificationPeer,
   getViewerStoryState,
   areFriends,
   countStoryViews,

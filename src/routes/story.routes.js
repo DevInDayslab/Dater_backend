@@ -7,6 +7,7 @@ const router = express.Router();
 router.post("/presign-upload", requireAuth, storyController.presignUpload);
 router.post("/", requireAuth, storyController.createStory);
 router.get("/reel", requireAuth, storyController.listReel);
+router.get("/notification-peer/:peerUserId", requireAuth, storyController.listNotificationPeerReel);
 router.get("/mine", requireAuth, storyController.listMine);
 router.get("/me/summary", requireAuth, storyController.getMeSummary);
 router.post("/me/mark-activity-seen", requireAuth, storyController.markActivitySeen);
