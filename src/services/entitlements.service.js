@@ -51,21 +51,24 @@ async function getBoostSnapshot(client, userId) {
     `SELECT remaining_credits FROM user_boost_wallet WHERE user_id = $1 LIMIT 1`,
     [userId]
   );
+  // Stacked boosts insert multiple rows; the latest row alone can have started_at in the "future"
+  // (segment starts when the previous segment ends). For UI ring + countdown use the full active window.
   const activationRes = await client.query(
-    `SELECT started_at, expires_at, activated_count
+    `SELECT MIN(started_at) AS session_started_at,
+            MAX(expires_at) AS session_expires_at
      FROM user_boost_activations
      WHERE user_id = $1
-     ORDER BY expires_at DESC
-     LIMIT 1`,
+       AND expires_at > NOW()`,
     [userId]
   );
-  const latest = activationRes.rows[0] || null;
-  const active = latest ? new Date(latest.expires_at).getTime() > Date.now() : false;
+  const row = activationRes.rows[0] || null;
+  const sessionExpires = row?.session_expires_at ? new Date(row.session_expires_at) : null;
+  const active = Boolean(sessionExpires && sessionExpires.getTime() > Date.now());
   return {
     credits: Number(walletRes.rows[0]?.remaining_credits || 0),
     boostActive: active,
-    boostStartedAt: toIsoOrNull(latest?.started_at),
-    boostExpiresAt: toIsoOrNull(latest?.expires_at),
+    boostStartedAt: toIsoOrNull(row?.session_started_at),
+    boostExpiresAt: toIsoOrNull(row?.session_expires_at),
   };
 }
 
