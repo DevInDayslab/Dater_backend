@@ -53,7 +53,7 @@ async function getBoostSnapshot(client, userId) {
   );
   // Stacked boosts insert multiple rows; the latest row alone can have started_at in the "future"
   // (segment starts when the previous segment ends). For UI ring + countdown use the full active window.
-  const activationRes = await client.query(
+  const activeRes = await client.query(
     `SELECT MIN(started_at) AS session_started_at,
             MAX(expires_at) AS session_expires_at
      FROM user_boost_activations
@@ -61,14 +61,34 @@ async function getBoostSnapshot(client, userId) {
        AND expires_at > NOW()`,
     [userId]
   );
-  const row = activationRes.rows[0] || null;
-  const sessionExpires = row?.session_expires_at ? new Date(row.session_expires_at) : null;
+  const activeRow = activeRes.rows[0] || null;
+  const sessionExpires = activeRow?.session_expires_at ? new Date(activeRow.session_expires_at) : null;
   const active = Boolean(sessionExpires && sessionExpires.getTime() > Date.now());
+
+  let boostStartedAt = toIsoOrNull(activeRow?.session_started_at);
+  let boostExpiresAt = toIsoOrNull(activeRow?.session_expires_at);
+
+  // When nothing is active, still expose the most recent activation so clients can detect "just ended"
+  // (e.g. success overlay) using a past boostExpiresAt — aggregates above return null with no active rows.
+  if (!active) {
+    const latestRes = await client.query(
+      `SELECT started_at, expires_at
+       FROM user_boost_activations
+       WHERE user_id = $1
+       ORDER BY expires_at DESC
+       LIMIT 1`,
+      [userId]
+    );
+    const latest = latestRes.rows[0] || null;
+    boostStartedAt = toIsoOrNull(latest?.started_at);
+    boostExpiresAt = toIsoOrNull(latest?.expires_at);
+  }
+
   return {
     credits: Number(walletRes.rows[0]?.remaining_credits || 0),
     boostActive: active,
-    boostStartedAt: toIsoOrNull(row?.session_started_at),
-    boostExpiresAt: toIsoOrNull(row?.session_expires_at),
+    boostStartedAt,
+    boostExpiresAt,
   };
 }
 
