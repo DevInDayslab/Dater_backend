@@ -338,6 +338,9 @@ async function getPublicProfile(viewerId, targetUserId, { source = "FEED", consu
     user.living_in_city_mode === "MANUAL_SWITCH" && manualLiving
       ? `Lives in ${manualLiving}`
       : "";
+  /** Premium feed/browse anchor (`user_filters.preferred_location_city`), not profile `living_in_city_mode`. */
+  const browseUsingSwitchCity =
+    String(user.preferred_location_city || "").trim().length > 0;
 
   return {
     userId: user.id,
@@ -361,6 +364,7 @@ async function getPublicProfile(viewerId, targetUserId, { source = "FEED", consu
     livesInLabel,
     fromLabel: user.home_town_city ? `From ${user.home_town_city}` : "",
     livingInCityMode: user.living_in_city_mode || "FOLLOW_DEVICE",
+    browseUsingSwitchCity,
   };
 }
 
