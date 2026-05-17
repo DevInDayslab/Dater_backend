@@ -10,6 +10,36 @@ const { sendEventDataNotification } = require("./pushNotification.service");
 
 const ONLINE_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
 
+/**
+ * Full-profile distance only (`getPublicProfile`): endpoints align with feed browse anchors
+ * (`user_filters.preferred_location_city` → `resolveIndiaBrowseAnchor` / `india_cities.json`).
+ *
+ * Per side: if that user has a non-empty preferred switch city, use resolved anchor lat/lng;
+ * if the label cannot be resolved, fall back to that user’s GPS (`users.location`). If they
+ * have no switch city set, the endpoint is always GPS. Distance is haversine between the two
+ * endpoints (matches feed anchor geometry in practice; not used on feed cards in this pass).
+ */
+function computeFullProfileDistanceKm(row) {
+  const viewerPref = String(row.viewer_preferred_location_city || "").trim();
+  const targetPref = String(row.preferred_location_city || "").trim();
+
+  function sideEndpoint(prefRaw, latRaw, lngRaw) {
+    if (prefRaw) {
+      const anchor = geocoderService.resolveIndiaBrowseAnchor(prefRaw);
+      if (anchor) return { lat: anchor.lat, lng: anchor.lng };
+    }
+    const lat = Number(latRaw);
+    const lng = Number(lngRaw);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+    return null;
+  }
+
+  const a = sideEndpoint(viewerPref, row.viewer_location_latitude, row.viewer_location_longitude);
+  const b = sideEndpoint(targetPref, row.location_latitude, row.location_longitude);
+  if (!a || !b) return null;
+  return geocoderService.haversineKm(a.lat, a.lng, b.lat, b.lng);
+}
+
 /** Browse/switch-city label: premium preferred → GPS nearest-city label — never profile `living_in_city`. */
 function mapBrowseCityLabelFromRow(row) {
   const pref = String(row.preferred_location_city || "").trim();
@@ -244,15 +274,20 @@ async function getPublicProfile(viewerId, targetUserId, { source = "FEED", consu
                FROM user_filters uf
               WHERE uf.user_id = u.id
               LIMIT 1) AS preferred_location_city,
-            CASE
-              WHEN u.location IS NOT NULL
-               AND (SELECT v.location FROM users v WHERE v.id = $1 LIMIT 1) IS NOT NULL
-              THEN ST_Distance(
-                u.location::geography,
-                (SELECT v.location FROM users v WHERE v.id = $1 LIMIT 1)::geography
-              ) / 1000.0
-              ELSE NULL
-            END AS distance_km,
+            (SELECT NULLIF(TRIM(uf.preferred_location_city), '')
+               FROM user_filters uf
+              WHERE uf.user_id = $1
+              LIMIT 1) AS viewer_preferred_location_city,
+            (SELECT ST_Y(v.location::geometry)
+               FROM users v
+              WHERE v.id = $1
+                AND v.deleted_at IS NULL
+              LIMIT 1) AS viewer_location_latitude,
+            (SELECT ST_X(v.location::geometry)
+               FROM users v
+              WHERE v.id = $1
+                AND v.deleted_at IS NULL
+              LIMIT 1) AS viewer_location_longitude,
             EXISTS (
               SELECT 1 FROM friendships f
               WHERE (f.u1_id = $1 AND f.u2_id = u.id) OR (f.u1_id = u.id AND f.u2_id = $1)
@@ -342,6 +377,8 @@ async function getPublicProfile(viewerId, targetUserId, { source = "FEED", consu
   const browseUsingSwitchCity =
     String(user.preferred_location_city || "").trim().length > 0;
 
+  const distanceKmRaw = computeFullProfileDistanceKm(user);
+
   return {
     userId: user.id,
     name: displayNameForPrivacy(user.name, user.hide_my_name === true),
@@ -360,7 +397,7 @@ async function getPublicProfile(viewerId, targetUserId, { source = "FEED", consu
     educationLine,
     occupationLine,
     mapCity: mapCityLine,
-    distanceKm: user.distance_km == null ? null : Number(Number(user.distance_km).toFixed(1)),
+    distanceKm: distanceKmRaw == null ? null : Number(Number(distanceKmRaw).toFixed(1)),
     livesInLabel,
     fromLabel: user.home_town_city ? `From ${user.home_town_city}` : "",
     livingInCityMode: user.living_in_city_mode || "FOLLOW_DEVICE",

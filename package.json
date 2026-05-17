@@ -10,6 +10,7 @@
     "seed:feed:delhi-gurugram-rich": "node src/scripts/seedDelhiGurugramRichMockProfiles.js",
     "seed:feed:delhi-ggn-noida-rich": "node src/scripts/seedDelhiGgnNoidaRichProfiles.js",
     "seed:feed:viewer": "node src/scripts/seedFeedProfilesForViewerPhone.js",
+    "report:seed:switch-city": "node src/scripts/reportSeededProfilesSwitchCity.js",
     "inspect:feed:viewer": "node src/scripts/inspectFeedForViewerPhone.js",
     "diagnose:feed:pair": "node src/scripts/diagnoseFeedPairByPhone.js",
     "inspect:notifications:viewer": "node src/scripts/checkNotificationPrefsForPhone.js",

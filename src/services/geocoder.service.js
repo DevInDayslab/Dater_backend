@@ -228,4 +228,5 @@ module.exports = {
   getAllIndianCities,
   resolveIndiaBrowseAnchor,
   getIndiaBrowseAnchorUnnestArrays,
+  haversineKm,
 };
