@@ -1616,12 +1616,19 @@ async function previewVerifyLiveness(req, res) {
     const code = error.code || "LIVENESS_FAILED";
     const status = code === "SESSION_NOT_FOUND" ? 404 : 400;
     debugLog("verify_liveness_preview_error", { error: error.message, code });
-    return res.status(status).json({
+    const payload = {
       success: false,
       code,
       message: error.message || "Liveness preview failed",
       details: error.details || undefined,
-    });
+    };
+    if (error.previewImageBase64) {
+      payload.data = {
+        previewImageBase64: error.previewImageBase64,
+        contentType: error.previewContentType || "image/jpeg",
+      };
+    }
+    return res.status(status).json(payload);
   }
 }
 

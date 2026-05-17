@@ -125,6 +125,16 @@ async function getLivenessPreviewForUser(userId, awsSessionId) {
   const livenessOut = await getFaceLivenessResult(awsSessionId);
   const status = String(livenessOut.Status || "");
   const confidence = Number(livenessOut.Confidence ?? 0);
+  const refBytes = extractReferenceImageBytes(livenessOut);
+
+  /** Attach AWS reference frame when present so the app retry UI can show the captured selfie, not the profile photo. */
+  function attachReferenceSnapshotIfUsable(err) {
+    if (refBytes && refBytes.length >= 100) {
+      err.previewImageBase64 = refBytes.toString("base64");
+      err.previewContentType = "image/jpeg";
+    }
+    return err;
+  }
 
   await query(
     `UPDATE user_verification_sessions
@@ -136,19 +146,22 @@ async function getLivenessPreviewForUser(userId, awsSessionId) {
   );
 
   if (status !== "SUCCEEDED") {
-    const err = new Error(`Liveness not succeeded (status=${status})`);
-    err.code = "LIVENESS_FAILED";
-    err.details = { status, confidence };
-    throw err;
+    throw attachReferenceSnapshotIfUsable(
+      Object.assign(new Error(`Liveness not succeeded (status=${status})`), {
+        code: "LIVENESS_FAILED",
+        details: { status, confidence },
+      })
+    );
   }
   if (confidence < LIVENESS_MIN_CONFIDENCE) {
-    const err = new Error(`Liveness confidence too low (${confidence})`);
-    err.code = "LIVENESS_FAILED";
-    err.details = { status, confidence };
-    throw err;
+    throw attachReferenceSnapshotIfUsable(
+      Object.assign(new Error(`Liveness confidence too low (${confidence})`), {
+        code: "LIVENESS_FAILED",
+        details: { status, confidence },
+      })
+    );
   }
 
-  const refBytes = extractReferenceImageBytes(livenessOut);
   if (!refBytes || refBytes.length < 100) {
     const err = new Error("No reference image returned from liveness");
     err.code = "LIVENESS_FAILED";
