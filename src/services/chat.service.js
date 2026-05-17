@@ -737,6 +737,35 @@ const CHAT_INBOX_VISIBILITY_WHERE = `
        )`;
 
 /**
+ * Inbox threads that count toward the bottom-nav chat badge (stricter than [listThreads] visibility).
+ * Excludes deleted-account / chat-ended rows and muted peers — those may still appear in the inbox list.
+ */
+const CHAT_NAV_BADGE_VISIBILITY_WHERE = `
+     FROM chat_threads t
+     JOIN chat_thread_participants mine ON mine.thread_id = t.id AND mine.user_id = $1::uuid
+     LEFT JOIN LATERAL (
+       SELECT p.user_id
+       FROM chat_thread_participants p
+       WHERE p.thread_id = t.id AND p.user_id <> $1::uuid
+       LIMIT 1
+     ) other ON true
+     LEFT JOIN users u ON u.id = other.user_id
+     LEFT JOIN chat_thread_user_state s ON s.thread_id = t.id AND s.user_id = $1::uuid
+     LEFT JOIN chat_user_pair_preferences pref ON pref.user_id = $1::uuid AND pref.target_id = other.user_id
+     WHERE u.id IS NOT NULL
+       AND u.deleted_at IS NULL
+       AND u.account_state NOT IN ('DELETED', 'BANNED', 'UNDERAGE_BLOCKED')
+       AND COALESCE(s.relationship_state::text, 'ACTIVE') NOT IN ('DELETED_ACCOUNT', 'CHAT_ENDED')
+       AND EXISTS (
+         SELECT 1
+         FROM chat_messages em
+         WHERE em.thread_id = t.id
+           AND em.deleted_at IS NULL
+       )
+       AND COALESCE(s.is_deleted_from_inbox, false) = false
+       AND COALESCE(pref.is_muted, false) = false`;
+
+/**
  * Sum of per-thread unread counters for inbox-visible threads (matches listThreads visibility rules).
  */
 async function sumUnreadMessages(viewerId) {
@@ -751,11 +780,12 @@ async function sumUnreadMessages(viewerId) {
 /**
  * Distinct inbox threads where the peer messaged last and the viewer has not sent a reply after that
  * (same predicate as UNANSWERED sort). Used for bottom-nav chat badge — one count per person, not per message.
+ * Visibility uses [CHAT_NAV_BADGE_VISIBILITY_WHERE] (excludes ended / deleted-account / muted).
  */
 async function countThreadsAwaitingViewerReply(viewerId) {
   const res = await query(
     `SELECT COUNT(*)::bigint AS c
-     ${CHAT_INBOX_VISIBILITY_WHERE}
+     ${CHAT_NAV_BADGE_VISIBILITY_WHERE}
        AND s.last_inbound_message_at IS NOT NULL
        AND (
          s.last_outbound_message_at IS NULL
