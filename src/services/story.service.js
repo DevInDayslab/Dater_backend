@@ -120,6 +120,7 @@ async function loadStoryRow(storyId) {
             s.deleted_at,
             COALESCE(s.audience, 'EVERYONE') AS audience,
             s.text_font_id,
+            COALESCE(s.is_text_only, FALSE) AS is_text_only,
             u.account_state::text AS owner_account_state
      FROM stories s
      JOIN users u ON u.id = s.user_id
@@ -674,6 +675,7 @@ async function listMyStories(userId) {
             s.created_at,
             s.expires_at,
             s.text_font_id,
+            COALESCE(s.is_text_only, FALSE) AS is_text_only,
             (SELECT COUNT(*)::int FROM story_interactions si
              WHERE si.story_id = s.id AND si.interaction_type = 'VIEW') AS view_count
      FROM stories s
@@ -694,6 +696,7 @@ async function listMyStories(userId) {
       expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
       viewCount: Number(row.view_count || 0),
       textFontId: row.text_font_id ? String(row.text_font_id) : null,
+      isTextOnly: row.is_text_only === true,
     });
   }
   return { stories };
@@ -758,7 +761,10 @@ function sanitizeStoryTextFontId(raw) {
   return cleaned.length > 64 ? cleaned.slice(0, 64) : cleaned;
 }
 
-async function createStoryFromUpload(userId, { mediaUrl, mediaType = "IMAGE", audience = "EVERYONE", textFontId } = {}) {
+async function createStoryFromUpload(
+  userId,
+  { mediaUrl, mediaType = "IMAGE", audience = "EVERYONE", textFontId, isTextOnly = false } = {}
+) {
   const aud = String(audience || "EVERYONE").toUpperCase() === "FRIENDS_ONLY" ? "FRIENDS_ONLY" : "EVERYONE";
   const mt = String(mediaType || "IMAGE").toUpperCase() === "VIDEO" ? "VIDEO" : "IMAGE";
   const url = String(mediaUrl || "").trim();
@@ -768,6 +774,7 @@ async function createStoryFromUpload(userId, { mediaUrl, mediaType = "IMAGE", au
     throw e;
   }
   const fontId = sanitizeStoryTextFontId(textFontId);
+  const textOnly = isTextOnly === true || isTextOnly === "true";
   const activeCount = await query(
     `SELECT COUNT(*)::int AS c FROM stories
      WHERE user_id = $1::uuid AND deleted_at IS NULL AND expires_at > NOW()`,
@@ -779,10 +786,10 @@ async function createStoryFromUpload(userId, { mediaUrl, mediaType = "IMAGE", au
     throw e;
   }
   const ins = await query(
-    `INSERT INTO stories (user_id, media_url, media_type, audience, expires_at, text_font_id)
-     VALUES ($1::uuid, $2, $3::story_media_type_enum, $4, NOW() + INTERVAL '24 hours', $5)
+    `INSERT INTO stories (user_id, media_url, media_type, audience, expires_at, text_font_id, is_text_only)
+     VALUES ($1::uuid, $2, $3::story_media_type_enum, $4, NOW() + INTERVAL '24 hours', $5, $6)
      RETURNING id, created_at, expires_at, audience`,
-    [userId, url, mt, aud, fontId]
+    [userId, url, mt, aud, fontId, textOnly]
   );
   const row = ins.rows[0];
   return {
@@ -1220,6 +1227,7 @@ ${advMatchEthnicityAnd}
               s.created_at,
               s.expires_at,
               s.text_font_id,
+              COALESCE(s.is_text_only, FALSE) AS is_text_only,
               COALESCE(s.audience, 'EVERYONE') AS audience,
               u.name,
               u.age_years,
@@ -1317,6 +1325,7 @@ ${advMatchEthnicityAnd}
       createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
       expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
       textFontId: row.text_font_id ? String(row.text_font_id) : null,
+      isTextOnly: row.is_text_only === true,
       _viewedByViewer: viewed,
     });
   }
@@ -1366,6 +1375,7 @@ async function listStoryReelForNotificationPeer(viewerId, peerUserId) {
             s.created_at,
             s.expires_at,
             s.text_font_id,
+            COALESCE(s.is_text_only, FALSE) AS is_text_only,
             u.name,
             u.age_years,
             u.is_verified,
@@ -1448,6 +1458,7 @@ async function listStoryReelForNotificationPeer(viewerId, peerUserId) {
       createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
       expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
       textFontId: row.text_font_id ? String(row.text_font_id) : null,
+      isTextOnly: row.is_text_only === true,
       _viewedByViewer: viewed,
     });
   }
@@ -1477,6 +1488,7 @@ async function getViewerStoryState(viewerId, storyId) {
       mediaUrl,
       mediaType,
       textFontId: story.text_font_id ? String(story.text_font_id) : null,
+      isTextOnly: story.is_text_only === true,
     };
   }
   const likedRes = await query(
@@ -1492,6 +1504,7 @@ async function getViewerStoryState(viewerId, storyId) {
     mediaUrl,
     mediaType,
     textFontId: story.text_font_id ? String(story.text_font_id) : null,
+    isTextOnly: story.is_text_only === true,
   };
 }
 

@@ -17,8 +17,14 @@ async function presignUpload(req, res) {
 async function createStory(req, res) {
   try {
     const userId = req.auth.userId;
-    const { mediaUrl, mediaType, audience, textFontId } = req.body || {};
-    const data = await storyService.createStoryFromUpload(userId, { mediaUrl, mediaType, audience, textFontId });
+    const { mediaUrl, mediaType, audience, textFontId, isTextOnly } = req.body || {};
+    const data = await storyService.createStoryFromUpload(userId, {
+      mediaUrl,
+      mediaType,
+      audience,
+      textFontId,
+      isTextOnly,
+    });
     return res.status(200).json({ success: true, data });
   } catch (error) {
     const code = error.code || "STORY_CREATE_FAILED";
