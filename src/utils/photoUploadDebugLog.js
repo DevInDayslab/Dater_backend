@@ -50,7 +50,6 @@ function serializeFacesForLog(faceDetails) {
 function buildGenderContextLog(genderContext, genderAlignment) {
   return {
     genderMain: genderContext?.genderMain ?? "",
-    genderLegacy: genderContext?.gender ?? "",
     genderMoreOptions: genderContext?.moreOptions ?? [],
     profileRequiresFemaleFace: genderAlignment?.requiresFemale === true,
     genderCheckSkipped: genderAlignment?.skipped === true,

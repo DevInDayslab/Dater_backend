@@ -285,7 +285,6 @@ async function confirmPhotoUpload(req, res) {
             requiredValue: "Female",
             requiredMinConfidence: 85,
             genderMain: scan.genderContext.genderMain,
-            genderLegacy: scan.genderContext.gender,
             genderMoreOptions: scan.genderContext.moreOptions,
             primaryFaceFromScan: scan.faceSummary,
             facesDetected: photoUploadDebugLog.serializeFacesForLog(scan.faceDetails),

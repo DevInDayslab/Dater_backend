@@ -99,7 +99,7 @@ function evaluateFacePresence(faceDetails) {
 async function loadUserGenderContext(userId) {
   const { query } = require("../config/db");
   const uRes = await query(
-    `SELECT gender_main, gender
+    `SELECT gender_main
      FROM users
      WHERE id = $1::uuid
      LIMIT 1`,
@@ -107,25 +107,24 @@ async function loadUserGenderContext(userId) {
   );
   const u = uRes.rows[0];
   if (!u) {
-    return { genderMain: "", gender: "", moreOptions: [] };
+    return { genderMain: "", moreOptions: [] };
   }
   const moreRes = await query(
-    `SELECT gender FROM user_gender_more_options WHERE user_id = $1::uuid ORDER BY gender ASC`,
+    `SELECT gender_option
+     FROM user_gender_more_options
+     WHERE user_id = $1::uuid
+     ORDER BY gender_option ASC`,
     [userId]
   );
   return {
     genderMain: String(u.gender_main || "").trim(),
-    gender: String(u.gender || "").trim(),
-    moreOptions: moreRes.rows.map((r) => String(r.gender || "").trim()).filter(Boolean),
+    moreOptions: moreRes.rows.map((r) => String(r.gender_option || "").trim()).filter(Boolean),
   };
 }
 
 function profileRequiresFemaleFace(genderContext) {
   const main = genderContext.genderMain.toLowerCase();
   if (main === "woman") return true;
-  const legacy = genderContext.gender.toLowerCase();
-  if (legacy === "woman") return true;
-  if (WOMAN_SUB_GENDER_LABELS.has(legacy)) return true;
   for (const opt of genderContext.moreOptions) {
     const o = opt.toLowerCase();
     if (o === "woman" || WOMAN_SUB_GENDER_LABELS.has(o)) return true;
