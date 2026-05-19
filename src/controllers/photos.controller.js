@@ -36,6 +36,32 @@ function photoUrlIdentity(raw) {
   return (q >= 0 ? s.slice(0, q) : s).trim();
 }
 
+async function rejectPhotoHard(userId, photoId, s3Key, code, extra = {}) {
+  if (s3Key) {
+    try {
+      await s3Media.deleteObjectByKey(s3Key);
+    } catch (_) {
+      /* best-effort */
+    }
+  }
+  await query(
+    `UPDATE user_photos
+     SET deleted_at = NOW(),
+         moderation_status = 'FAILED_MODERATION'
+     WHERE id = $1 AND user_id = $2`,
+    [photoId, userId]
+  );
+  return {
+    success: true,
+    data: {
+      moderationPassed: false,
+      photoId,
+      code,
+      ...extra,
+    },
+  };
+}
+
 /**
  * POST /me/photos/presign
  * Body: { photoOrder: number, blurHash?: string } — 1..6, slot order (1 = front / primary).
@@ -163,21 +189,26 @@ async function confirmPhotoUpload(req, res) {
       });
     }
 
-    let failedModeration = false;
-    let moderationDetail = null;
+    let scan = null;
     try {
-      moderationDetail = await photoModeration.scanS3ObjectForModerationDetail(row.s3_key);
-      failedModeration = moderationDetail.failedModeration;
+      scan = await photoModeration.scanS3ObjectForUploadValidation(row.s3_key, userId);
+      const moderationDetail = scan.moderation;
+      const failedModeration = moderationDetail.failedModeration;
       debugLog("photo_uploaded_moderation_scan", {
         userId,
         photoId: row.id,
         s3Key: row.s3_key,
-        sourceWebpBytes: moderationDetail.sourceWebpBytes,
-        jpegBytes: moderationDetail.jpegBytes,
+        sourceWebpBytes: scan.sourceWebpBytes,
+        jpegBytes: scan.jpegBytes,
         minConfidence: photoModeration.MIN_CONFIDENCE,
         rekognitionLabelsAtOrAboveThreshold: moderationDetail.labelsAtThreshold,
         policyHits: moderationDetail.policyHits,
         nsfwPolicyResult: failedModeration ? "FAILED" : "PASSED",
+        faceSummary: scan.faceSummary,
+        facePresencePassed: scan.facePresence.passed,
+        genderRequiresFemale: scan.genderAlignment.requiresFemale === true,
+        genderAlignmentPassed: scan.genderAlignment.passed,
+        genderMain: scan.genderContext.genderMain,
       });
     } catch (e) {
       if (isS3ObjectMissingError(e)) {
@@ -201,32 +232,44 @@ async function confirmPhotoUpload(req, res) {
       });
     }
 
-    if (failedModeration) {
+    if (scan.moderation.failedModeration) {
       debugLog("photo_moderation_rejected", {
         userId,
         photoId: row.id,
-        policyHits: moderationDetail?.policyHits ?? [],
+        policyHits: scan.moderation.policyHits ?? [],
       });
-      try {
-        await s3Media.deleteObjectByKey(row.s3_key);
-      } catch (e) {
-        // continue to mark DB even if delete races
-      }
-      await query(
-        `UPDATE user_photos
-         SET deleted_at = NOW(),
-             moderation_status = 'FAILED_MODERATION'
-         WHERE id = $1 AND user_id = $2`,
-        [photoId, userId]
+      return res.status(200).json(await rejectPhotoHard(userId, row.id, row.s3_key, "FAILED_MODERATION"));
+    }
+
+    if (!scan.facePresence.passed) {
+      debugLog("photo_face_not_detected", {
+        userId,
+        photoId: row.id,
+        faceCount: scan.facePresence.faceCount,
+        primaryConfidence: scan.facePresence.primaryConfidence,
+        multipleFaces: scan.facePresence.multipleFaces,
+      });
+      return res.status(200).json(
+        await rejectPhotoHard(userId, row.id, row.s3_key, scan.facePresence.code || "FACE_NOT_DETECTED", {
+          multipleFaces: scan.facePresence.multipleFaces === true,
+        })
       );
-      return res.status(200).json({
-        success: true,
-        data: {
-          moderationPassed: false,
-          photoId: row.id,
-          code: "FAILED_MODERATION",
-        },
+    }
+
+    if (!scan.genderAlignment.passed && scan.genderAlignment.requiresFemale) {
+      debugLog("photo_gender_mismatch_rejected", {
+        userId,
+        photoId: row.id,
+        detectedValue: scan.genderAlignment.detectedValue,
+        detectedConfidence: scan.genderAlignment.detectedConfidence,
+        multipleFaces: scan.genderAlignment.multipleFaces,
+        genderMain: scan.genderContext.genderMain,
       });
+      return res.status(200).json(
+        await rejectPhotoHard(userId, row.id, row.s3_key, "GENDER_MISMATCH", {
+          multipleFaces: scan.genderAlignment.multipleFaces === true,
+        })
+      );
     }
 
     let faceResult;
@@ -238,26 +281,9 @@ async function confirmPhotoUpload(req, res) {
       );
     } catch (e) {
       debugLog("photo_face_anchor_error", { userId, photoId: row.id, error: e.message });
-      try {
-        await s3Media.deleteObjectByKey(row.s3_key);
-      } catch (_) {
-        /* best-effort */
-      }
-      await query(
-        `UPDATE user_photos
-         SET deleted_at = NOW(),
-             moderation_status = 'FAILED_MODERATION'
-         WHERE id = $1 AND user_id = $2`,
-        [photoId, userId]
+      return res.status(200).json(
+        await rejectPhotoHard(userId, row.id, row.s3_key, e.code || "FACE_MATCH_ERROR")
       );
-      return res.status(200).json({
-        success: true,
-        data: {
-          moderationPassed: false,
-          photoId: row.id,
-          code: e.code || "FACE_MATCH_ERROR",
-        },
-      });
     }
 
     if (!faceResult.skipped && !faceResult.ok) {
@@ -266,26 +292,7 @@ async function confirmPhotoUpload(req, res) {
         photoId: row.id,
         similarity: faceResult.similarity,
       });
-      try {
-        await s3Media.deleteObjectByKey(row.s3_key);
-      } catch (_) {
-        /* best-effort */
-      }
-      await query(
-        `UPDATE user_photos
-         SET deleted_at = NOW(),
-             moderation_status = 'FAILED_MODERATION'
-         WHERE id = $1 AND user_id = $2`,
-        [photoId, userId]
-      );
-      return res.status(200).json({
-        success: true,
-        data: {
-          moderationPassed: false,
-          photoId: row.id,
-          code: "FACE_MISMATCH",
-        },
-      });
+      return res.status(200).json(await rejectPhotoHard(userId, row.id, row.s3_key, "FACE_MISMATCH"));
     }
 
     await query(
