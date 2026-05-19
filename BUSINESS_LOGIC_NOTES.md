@@ -44,6 +44,7 @@ This file captures the finalized business rules and schema intent so Node.js imp
 - **Stale uploads:** Pending rows older than a configurable window (default 1 hour) are expired (same failure path + S3 cleanup) on presign, confirm, and `GET /me` maintenance hook.
 - **Confirm before PUT:** If the object key is missing in S3, API returns **409** with `code: "S3_OBJECT_MISSING"` (not a 502 moderation error).
 - **Read model:** `GET /api/v1/users/me` includes `profilePhotos[]` with `moderationStatus` and `blurHash` when stored.
+- **Photo confirm debug logs:** Grep server output for `photo_confirm_REJECTED` (includes `rejectStep` + `rejectCode`), `photo_confirm_scan` (full Rekognition face/gender/moderation snapshot), or `photo_confirm_face_compare`. Set `DEBUG_SERVER_LOG=1` in production to enable. Non-production confirm responses may include `debugRejectStep` / `debugRejectDetail` on reject. Android Logcat: tag `DaterPhotoUpload`.
 
 **Not yet in backend:** feed PostGIS engine, selfie `CompareFaces`, stories, chat, premium gates — see `backend_raw.md` and roadmap in `.cursorcontext`.
 

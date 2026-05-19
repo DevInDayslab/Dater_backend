@@ -8,6 +8,7 @@ const {
 const { query, pool } = require("../config/db");
 const s3Media = require("./s3Media.service");
 const { debugLog } = require("../utils/serverDebugLog");
+const photoUploadDebugLog = require("../utils/photoUploadDebugLog");
 
 const region = process.env.AWS_REGION || "ap-south-1";
 const rekognition = new RekognitionClient({ region });
@@ -484,7 +485,7 @@ async function loadUserPhotosPayload(userId) {
  * For new uploads: require CompareFaces only after user is verified.
  * Unverified users should pass on moderation-only (NSFW/weapons/violence) checks.
  */
-async function assertNewPhotoMatchesVerificationAnchor(userId, newPhotoS3Key, excludePhotoId) {
+async function assertNewPhotoMatchesVerificationAnchor(userId, newPhotoS3Key, excludePhotoId, logCtx = {}) {
   const uRes = await query(
     `SELECT account_state, is_verified, verification_selfie_s3_key
      FROM users
@@ -503,10 +504,15 @@ async function assertNewPhotoMatchesVerificationAnchor(userId, newPhotoS3Key, ex
   const needsMatch = u.is_verified === true || accountState === "HIDDEN_BY_MODERATION";
 
   if (!needsMatch) {
+    photoUploadDebugLog.logFaceCompare(
+      { userId, ...logCtx },
+      { skipped: true, reason: "user_not_verified", isVerified: u.is_verified === true, accountState }
+    );
     return { skipped: true };
   }
 
   let anchorKey = u.verification_selfie_s3_key;
+  let anchorSource = anchorKey ? "verification_selfie_s3_key" : null;
   if (!anchorKey) {
     const excludeId = excludePhotoId || null;
     const fb = excludeId
@@ -534,9 +540,14 @@ async function assertNewPhotoMatchesVerificationAnchor(userId, newPhotoS3Key, ex
           [userId]
         );
     anchorKey = fb.rows[0]?.s3_key || null;
+    anchorSource = anchorKey ? "fallback_approved_profile_photo" : null;
   }
 
   if (!anchorKey) {
+    photoUploadDebugLog.logFaceCompare(
+      { userId, ...logCtx },
+      { skipped: false, error: "NO_VERIFICATION_ANCHOR", isVerified: u.is_verified === true, accountState }
+    );
     const err = new Error("No verification anchor available for face match");
     err.code = "NO_VERIFICATION_ANCHOR";
     throw err;
@@ -548,9 +559,18 @@ async function assertNewPhotoMatchesVerificationAnchor(userId, newPhotoS3Key, ex
   const newJpeg = await normalizeForCompareFacesJpeg(newRaw);
 
   const similarity = await compareSelfieToTargetJpeg(anchorJpeg, newJpeg);
+  const compareLog = {
+    anchorSource,
+    similarity,
+    minRequired: FACE_MATCH_MIN_SIMILARITY,
+    anchorJpegBytes: anchorJpeg.length,
+    newJpegBytes: newJpeg.length,
+  };
   if (similarity < FACE_MATCH_MIN_SIMILARITY) {
+    photoUploadDebugLog.logFaceCompare({ userId, ...logCtx }, { ok: false, ...compareLog });
     return { ok: false, code: "FACE_MISMATCH", similarity };
   }
+  photoUploadDebugLog.logFaceCompare({ userId, ...logCtx }, { ok: true, ...compareLog });
   return { ok: true, similarity };
 }
 

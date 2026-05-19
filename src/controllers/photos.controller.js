@@ -5,6 +5,7 @@ const photoMaintenance = require("../services/photoMaintenance.service");
 const verificationService = require("../services/verification.service");
 const profileMeExtension = require("../services/profileMeExtension.service");
 const { debugLog } = require("../utils/serverDebugLog");
+const photoUploadDebugLog = require("../utils/photoUploadDebugLog");
 
 function normalizeBlurHash(raw) {
   if (raw == null || typeof raw !== "string") return null;
@@ -37,6 +38,15 @@ function photoUrlIdentity(raw) {
 }
 
 async function rejectPhotoHard(userId, photoId, s3Key, code, extra = {}) {
+  const { rejectStep, rejectDetail, ...clientExtra } = extra;
+  if (rejectStep) {
+    photoUploadDebugLog.logPhotoConfirmRejected(
+      { userId, photoId, s3Key: s3Key || null },
+      rejectStep,
+      code,
+      rejectDetail || {}
+    );
+  }
   if (s3Key) {
     try {
       await s3Media.deleteObjectByKey(s3Key);
@@ -51,14 +61,19 @@ async function rejectPhotoHard(userId, photoId, s3Key, code, extra = {}) {
      WHERE id = $1 AND user_id = $2`,
     [photoId, userId]
   );
-  return {
-    success: true,
-    data: {
+  const data = photoUploadDebugLog.attachRejectDebugToPayload(
+    {
       moderationPassed: false,
       photoId,
       code,
-      ...extra,
+      ...clientExtra,
     },
+    rejectStep || "UNKNOWN",
+    rejectDetail || {}
+  );
+  return {
+    success: true,
+    data,
   };
 }
 
@@ -189,27 +204,17 @@ async function confirmPhotoUpload(req, res) {
       });
     }
 
+    const confirmCtx = {
+      userId,
+      photoId: row.id,
+      photoOrder: row.photo_order,
+      s3Key: row.s3_key,
+    };
+
     let scan = null;
     try {
       scan = await photoModeration.scanS3ObjectForUploadValidation(row.s3_key, userId);
-      const moderationDetail = scan.moderation;
-      const failedModeration = moderationDetail.failedModeration;
-      debugLog("photo_uploaded_moderation_scan", {
-        userId,
-        photoId: row.id,
-        s3Key: row.s3_key,
-        sourceWebpBytes: scan.sourceWebpBytes,
-        jpegBytes: scan.jpegBytes,
-        minConfidence: photoModeration.MIN_CONFIDENCE,
-        rekognitionLabelsAtOrAboveThreshold: moderationDetail.labelsAtThreshold,
-        policyHits: moderationDetail.policyHits,
-        nsfwPolicyResult: failedModeration ? "FAILED" : "PASSED",
-        faceSummary: scan.faceSummary,
-        facePresencePassed: scan.facePresence.passed,
-        genderRequiresFemale: scan.genderAlignment.requiresFemale === true,
-        genderAlignmentPassed: scan.genderAlignment.passed,
-        genderMain: scan.genderContext.genderMain,
-      });
+      photoUploadDebugLog.logPhotoConfirmScan(confirmCtx, scan);
     } catch (e) {
       if (isS3ObjectMissingError(e)) {
         debugLog("photo_confirm_s3_missing", { userId, photoId: row.id, s3Key: row.s3_key });
@@ -233,40 +238,63 @@ async function confirmPhotoUpload(req, res) {
     }
 
     if (scan.moderation.failedModeration) {
-      debugLog("photo_moderation_rejected", {
-        userId,
-        photoId: row.id,
-        policyHits: scan.moderation.policyHits ?? [],
-      });
-      return res.status(200).json(await rejectPhotoHard(userId, row.id, row.s3_key, "FAILED_MODERATION"));
+      const policyHits = scan.moderation.policyHits ?? [];
+      return res.status(200).json(
+        await rejectPhotoHard(userId, row.id, row.s3_key, "FAILED_MODERATION", {
+          rejectStep: "MODERATION",
+          rejectDetail: {
+            policyHits,
+            labelsAtThreshold: scan.moderation.labelsAtThreshold ?? [],
+            hint: "Rekognition moderation labels triggered NSFW/violence/weapons policy",
+          },
+        })
+      );
     }
 
     if (!scan.facePresence.passed) {
-      debugLog("photo_face_not_detected", {
-        userId,
-        photoId: row.id,
-        faceCount: scan.facePresence.faceCount,
-        primaryConfidence: scan.facePresence.primaryConfidence,
-        multipleFaces: scan.facePresence.multipleFaces,
-      });
+      const faceCode = scan.facePresence.code || "FACE_NOT_DETECTED";
       return res.status(200).json(
-        await rejectPhotoHard(userId, row.id, row.s3_key, scan.facePresence.code || "FACE_NOT_DETECTED", {
+        await rejectPhotoHard(userId, row.id, row.s3_key, faceCode, {
+          rejectStep: "FACE_PRESENCE",
+          rejectDetail: {
+            reason: scan.facePresence.reason ?? null,
+            faceCount: scan.facePresence.faceCount,
+            primaryConfidence: scan.facePresence.primaryConfidence,
+            primaryAreaFraction: scan.facePresence.primaryAreaFraction,
+            multipleFaces: scan.facePresence.multipleFaces === true,
+            facesDetected: photoUploadDebugLog.serializeFacesForLog(scan.faceDetails),
+            hint:
+              scan.facePresence.reason === "face_too_small"
+                ? "Primary face bbox below minimum area fraction"
+                : scan.facePresence.faceCount === 0
+                  ? "No faces in DetectFaces response"
+                  : "Primary face confidence below threshold",
+          },
           multipleFaces: scan.facePresence.multipleFaces === true,
         })
       );
     }
 
     if (!scan.genderAlignment.passed && scan.genderAlignment.requiresFemale) {
-      debugLog("photo_gender_mismatch_rejected", {
-        userId,
-        photoId: row.id,
-        detectedValue: scan.genderAlignment.detectedValue,
-        detectedConfidence: scan.genderAlignment.detectedConfidence,
-        multipleFaces: scan.genderAlignment.multipleFaces,
-        genderMain: scan.genderContext.genderMain,
-      });
       return res.status(200).json(
         await rejectPhotoHard(userId, row.id, row.s3_key, "GENDER_MISMATCH", {
+          rejectStep: "GENDER",
+          rejectDetail: {
+            detectedValue: scan.genderAlignment.detectedValue,
+            detectedConfidence: scan.genderAlignment.detectedConfidence,
+            requiredValue: "Female",
+            requiredMinConfidence: 85,
+            genderMain: scan.genderContext.genderMain,
+            genderLegacy: scan.genderContext.gender,
+            genderMoreOptions: scan.genderContext.moreOptions,
+            primaryFaceFromScan: scan.faceSummary,
+            facesDetected: photoUploadDebugLog.serializeFacesForLog(scan.faceDetails),
+            multipleFaces: scan.genderAlignment.multipleFaces === true,
+            hint:
+              scan.genderAlignment.detectedValue !== "Female"
+                ? "Rekognition primary-face gender is not Female"
+                : "Female detected but confidence below 85%",
+          },
           multipleFaces: scan.genderAlignment.multipleFaces === true,
         })
       );
@@ -277,23 +305,35 @@ async function confirmPhotoUpload(req, res) {
       faceResult = await verificationService.assertNewPhotoMatchesVerificationAnchor(
         userId,
         row.s3_key,
-        row.id
+        row.id,
+        confirmCtx
       );
     } catch (e) {
-      debugLog("photo_face_anchor_error", { userId, photoId: row.id, error: e.message });
       return res.status(200).json(
-        await rejectPhotoHard(userId, row.id, row.s3_key, e.code || "FACE_MATCH_ERROR")
+        await rejectPhotoHard(userId, row.id, row.s3_key, e.code || "FACE_MATCH_ERROR", {
+          rejectStep: "FACE_COMPARE_ERROR",
+          rejectDetail: { error: e.message, hint: "CompareFaces anchor step threw" },
+        })
       );
     }
 
     if (!faceResult.skipped && !faceResult.ok) {
-      debugLog("photo_face_mismatch", {
-        userId,
-        photoId: row.id,
-        similarity: faceResult.similarity,
-      });
-      return res.status(200).json(await rejectPhotoHard(userId, row.id, row.s3_key, "FACE_MISMATCH"));
+      return res.status(200).json(
+        await rejectPhotoHard(userId, row.id, row.s3_key, "FACE_MISMATCH", {
+          rejectStep: "FACE_COMPARE",
+          rejectDetail: {
+            similarity: faceResult.similarity,
+            minRequired: verificationService.FACE_MATCH_MIN_SIMILARITY,
+            hint: "New photo did not match verification selfie anchor",
+          },
+        })
+      );
     }
+
+    photoUploadDebugLog.logPhotoConfirmApproved(confirmCtx, {
+      faceCompareSkipped: faceResult.skipped === true,
+      faceCompareSimilarity: faceResult.similarity ?? null,
+    });
 
     await query(
       `UPDATE user_photos
