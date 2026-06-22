@@ -50,7 +50,8 @@ async function normalizePhotoOrdersForUser(userId) {
     `UPDATE user_photos
      SET photo_order = photo_order + 100
      WHERE user_id = $1
-       AND deleted_at IS NULL`,
+       AND deleted_at IS NULL
+       AND moderation_status = 'APPROVED'`,
     [userId]
   );
 
@@ -61,6 +62,7 @@ async function normalizePhotoOrdersForUser(userId) {
        FROM user_photos
        WHERE user_id = $1
          AND deleted_at IS NULL
+         AND moderation_status = 'APPROVED'
      )
      UPDATE user_photos p
      SET photo_order = r.rn,

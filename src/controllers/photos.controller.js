@@ -37,6 +37,74 @@ function photoUrlIdentity(raw) {
   return (q >= 0 ? s.slice(0, q) : s).trim();
 }
 
+/** Staging slot for replacement uploads: target slot N → order 100+N until moderation passes. */
+const PENDING_REPLACEMENT_ORDER_OFFSET = 100;
+
+function stagingOrderForSlot(photoOrder) {
+  return PENDING_REPLACEMENT_ORDER_OFFSET + photoOrder;
+}
+
+async function softDeletePhotoRows(userId, rows) {
+  for (const row of rows) {
+    if (row.s3_key) {
+      try {
+        await s3Media.deleteObjectByKey(row.s3_key);
+      } catch (_) {
+        /* best-effort */
+      }
+    }
+  }
+}
+
+async function softDeletePhotosAtOrders(userId, photoOrders, { approvedOnly = false } = {}) {
+  if (!photoOrders.length) return;
+  const moderationClause = approvedOnly ? " AND moderation_status = 'APPROVED'" : "";
+  const res = await query(
+    `UPDATE user_photos
+     SET deleted_at = NOW(),
+         moderation_status = 'FAILED_MODERATION'
+     WHERE user_id = $1
+       AND photo_order = ANY($2::smallint[])
+       AND deleted_at IS NULL${moderationClause}
+     RETURNING s3_key`,
+    [userId, photoOrders]
+  );
+  await softDeletePhotoRows(userId, res.rows);
+  return res.rowCount;
+}
+
+/**
+ * After moderation passes: move staged replacement (order 100+N) onto slot N and remove prior approved photo.
+ */
+async function finalizeApprovedPhotoSlot(userId, photoId, photoOrder) {
+  if (photoOrder <= PENDING_REPLACEMENT_ORDER_OFFSET) {
+    await query(
+      `UPDATE user_photos
+       SET is_primary = ($2 = 1)
+       WHERE id = $1 AND user_id = $3`,
+      [photoId, photoOrder, userId]
+    );
+    return;
+  }
+
+  const targetOrder = photoOrder - PENDING_REPLACEMENT_ORDER_OFFSET;
+  if (!Number.isInteger(targetOrder) || targetOrder < 1 || targetOrder > 6) {
+    throw new Error(`Invalid staged photo_order ${photoOrder}`);
+  }
+
+  await softDeletePhotosAtOrders(userId, [targetOrder], { approvedOnly: true });
+
+  await query(
+    `UPDATE user_photos
+     SET photo_order = $3,
+         is_primary = ($3 = 1)
+     WHERE id = $1 AND user_id = $2`,
+    [photoId, userId, targetOrder]
+  );
+
+  debugLog("photo_replacement_finalized", { userId, photoId, targetOrder });
+}
+
 async function rejectPhotoHard(userId, photoId, s3Key, code, extra = {}) {
   const { rejectStep, rejectDetail, ...clientExtra } = extra;
   if (rejectStep) {
@@ -95,25 +163,25 @@ async function presignPhotoUpload(req, res) {
       });
     }
 
-    const prev = await query(
-      `UPDATE user_photos
-       SET deleted_at = NOW(),
-           moderation_status = 'FAILED_MODERATION'
+    const approvedAtSlot = await query(
+      `SELECT id
+       FROM user_photos
        WHERE user_id = $1
          AND photo_order = $2
          AND deleted_at IS NULL
-       RETURNING s3_key`,
+         AND moderation_status = 'APPROVED'
+       LIMIT 1`,
       [userId, photoOrder]
     );
+    const isReplacement = approvedAtSlot.rows.length > 0;
+    let insertOrder = photoOrder;
 
-    for (const row of prev.rows) {
-      if (row.s3_key) {
-        try {
-          await s3Media.deleteObjectByKey(row.s3_key);
-        } catch (e) {
-          // Best-effort cleanup of replaced slot
-        }
-      }
+    if (isReplacement) {
+      // Keep the current approved photo until /confirm succeeds.
+      insertOrder = stagingOrderForSlot(photoOrder);
+      await softDeletePhotosAtOrders(userId, [insertOrder]);
+    } else {
+      await softDeletePhotosAtOrders(userId, [photoOrder]);
     }
 
     const photoId = s3Media.newPhotoId();
@@ -125,13 +193,15 @@ async function presignPhotoUpload(req, res) {
       `INSERT INTO user_photos (
          id, user_id, photo_url, photo_order, is_primary, s3_key, moderation_status, blur_hash, uploaded_at
        ) VALUES ($1, $2, $3, $4, $5, $6, 'PENDING_MODERATION', $7, NOW())`,
-      [photoId, userId, publicUrl, photoOrder, photoOrder === 1, s3Key, blurHash]
+      [photoId, userId, publicUrl, insertOrder, insertOrder === 1, s3Key, blurHash]
     );
 
     debugLog("photo_presign_ok", {
       userId,
       photoId,
       photoOrder,
+      insertOrder,
+      isReplacement,
       s3Key,
       contentType: "image/webp",
       blurHashStored: Boolean(blurHash),
@@ -173,7 +243,7 @@ async function confirmPhotoUpload(req, res) {
     }
 
     const rowResult = await query(
-      `SELECT id, s3_key, moderation_status, photo_url, blur_hash
+      `SELECT id, s3_key, moderation_status, photo_url, blur_hash, photo_order
        FROM user_photos
        WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
        LIMIT 1`,
@@ -341,6 +411,8 @@ async function confirmPhotoUpload(req, res) {
       [photoId, userId]
     );
 
+    await finalizeApprovedPhotoSlot(userId, row.id, row.photo_order);
+
     const acct = await query(
       `SELECT account_state FROM users WHERE id = $1 LIMIT 1`,
       [userId]
@@ -411,7 +483,9 @@ async function deletePhotoByOrder(req, res) {
     const countRes = await query(
       `SELECT COUNT(*)::int AS cnt
        FROM user_photos
-       WHERE user_id = $1 AND deleted_at IS NULL`,
+       WHERE user_id = $1
+         AND deleted_at IS NULL
+         AND moderation_status = 'APPROVED'`,
       [userId]
     );
     const activeCount = countRes.rows[0]?.cnt ?? 0;
@@ -515,6 +589,7 @@ async function reorderPhotos(req, res) {
        FROM user_photos
        WHERE user_id = $1
          AND deleted_at IS NULL
+         AND moderation_status = 'APPROVED'
        ORDER BY photo_order ASC, uploaded_at ASC, id ASC`,
       [userId]
     );

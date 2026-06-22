@@ -17,6 +17,7 @@
     "seed:notifications:viewer": "node src/scripts/seedIncomingNotificationsForViewerPhone.js",
     "clear:social:for-phones": "node src/scripts/clearSocialGraphForPhones.js",
     "seed:friends:active:viewer": "node src/scripts/seedActiveFriendsForViewerPhone.js",
+    "seed:stories:feed-friends:viewer": "node src/scripts/seedFeedAndFriendStoriesForViewerPhone.js",
     "seed:story:repair:viewer": "node src/scripts/seedStoryReelRepairForViewerPhone.js",
     "seed:story:activity:demo": "node src/scripts/seedStoryActivityDemo.js",
     "seed:story:reel:multi": "node src/scripts/seedMultiUserStoryReelForViewerPhone.js",

@@ -117,7 +117,7 @@ async function main() {
         if (i % 3 === 0) {
           await client.query(`UPDATE users SET hide_my_name = TRUE WHERE id = $1::uuid`, [candidate.userId]);
         }
-        if (i % 2 === 0) await seedActiveStories(client, candidate.userId, i);
+        await seedActiveStories(client, candidate.userId, i);
         created.push({ userId: candidate.userId, name: candidate.name });
       }
     } else {
@@ -131,7 +131,7 @@ async function main() {
       let i = 1;
       for (const row of existingFriendsRes.rows) {
         await ensureFriendshipAndThread(client, viewer.id, row.friend_id, i);
-        if (i % 2 === 0) await seedActiveStories(client, row.friend_id, i);
+        await seedActiveStories(client, row.friend_id, i);
         created.push({ userId: row.friend_id, name: "" });
         i += 1;
       }

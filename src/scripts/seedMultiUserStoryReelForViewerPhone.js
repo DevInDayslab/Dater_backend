@@ -8,8 +8,8 @@
  * - 1 friend has 3 stories; everyone else has 1 → 15 story rows total.
  *
  * From backend/:
- *   npm run seed:story:reel:multi -- 9811700705
- *   npm run seed:story:reel:multi -- +919811700705
+ *   npm run seed:story:reel:multi -- 9354120990
+ *   npm run seed:story:reel:multi -- +919354120990
  */
 require("dotenv").config();
 const path = require("path");
@@ -37,7 +37,7 @@ function mediaUrlForStory(posterIndex, storySeq) {
 }
 
 async function main() {
-  const rawPhone = process.argv[2] || "9811700705";
+  const rawPhone = process.argv[2] || "9354120990";
   const phoneE164 = toE164(rawPhone);
 
   const client = new Client({
