@@ -57,8 +57,25 @@ Use `account_state = 'BANNED'` — never `is_banned`.
 { "totalReports": 0, "bannedUsers": 0 }
 ```
 
+## Phase 1b + 2 (implemented)
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/v1/admin/users` | Paginated list with search, state/premium/verified/gender filters, presigned primary photo |
+| `GET /api/v1/admin/users/:userId/profile` | Full profile + junction tables |
+| `GET /api/v1/admin/users/:userId/photos` | All photos (read-only) |
+| `GET /api/v1/admin/users/:userId/filters` | Discovery filters |
+| `GET /api/v1/admin/users/:userId/verification` | Verification selfie + sessions |
+| `GET /api/v1/admin/users/:userId/trust` | Warnings, reports against/filed, blocks |
+| `GET /api/v1/admin/users/:userId/content` | Active story + history |
+| `GET /api/v1/admin/users/:userId/chat` | Thread list |
+| `GET /api/v1/admin/users/:userId/chat/:threadId` | Messages (for report popup) |
+| `GET /api/v1/admin/users/:userId/social` | Friends, pending requests, notifications, sessions |
+| `GET /api/v1/admin/users/:userId/revenue` | Wallets, purchases (counts), chat unlocks |
+| `GET /api/v1/admin/reports` | Paginated reports with reporter/reported names + preview URLs |
+| `GET /api/v1/admin/reports/:reportId` | Report detail + context (CHAT messages / STORY media / PROFILE bio) |
+| `DELETE /api/v1/admin/reports/:reportId` | Dismiss report + `reconcileReportMilestonesAfterDismiss` |
+
 ## Next phases
 
-- **Phase 1b:** User list + detail GET endpoints
-- **Phase 2:** Reports list, report detail, `DELETE /admin/reports/:id` (dismiss)
-- **Phase 3:** User trust mutations, broadcast, settings
+- **Phase 3:** User trust mutations (ban/unban/warn), broadcast, settings
