@@ -1,26 +1,60 @@
 const { pool } = require("../config/db");
 const { debugLog } = require("../utils/serverDebugLog");
-
-const PREMIUM_PLANS = {
-  WEEK: { days: 7, packCode: "PREMIUM_WEEK" },
-  MONTH: { days: 30, packCode: "PREMIUM_MONTH" },
-  THREE_MONTHS: { days: 90, packCode: "PREMIUM_THREE_MONTHS" },
-};
-
-const BOOST_PACKS = {
-  1: { packCode: "BOOST_1", quantity: 1 },
-  5: { packCode: "BOOST_5", quantity: 5 },
-  15: { packCode: "BOOST_15", quantity: 15 },
-};
-
-const COMMENT_PACKS = {
-  2: { packCode: "COMMENTS_2", quantity: 2 },
-  5: { packCode: "COMMENTS_5", quantity: 5 },
-  15: { packCode: "COMMENTS_15", quantity: 15 },
-};
+const productConfigService = require("./productConfig.service");
 
 function toIsoOrNull(v) {
   return v ? new Date(v).toISOString() : null;
+}
+
+function devTransactionId(userId, packCode) {
+  return `dev_${userId}_${packCode}_${Date.now()}`;
+}
+
+async function resolvePremiumProduct({ packCode, planCode }) {
+  if (packCode) {
+    const product = await productConfigService.getProductByPackCode(packCode);
+    if (product?.category === "PREMIUM") return product;
+  }
+  if (planCode) {
+    return productConfigService.getProductByPlanCode(planCode);
+  }
+  return null;
+}
+
+async function resolvePackProduct(category, { packCode, packSize }) {
+  if (packCode) {
+    const product = await productConfigService.getProductByPackCode(packCode);
+    if (product?.category === category) return product;
+  }
+  if (packSize != null) {
+    return productConfigService.getProductByPackSize(category, packSize);
+  }
+  return null;
+}
+
+async function insertPurchase(client, {
+  userId,
+  itemType,
+  packCode,
+  amountRupees,
+  quantity,
+  transactionId,
+  metadata,
+}) {
+  const txId = String(transactionId || "").trim() || devTransactionId(userId, packCode);
+  await client.query(
+    `INSERT INTO user_purchases (user_id, item_type, amount, transaction_id, pack_code, quantity, metadata, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW())`,
+    [
+      userId,
+      itemType,
+      amountRupees,
+      txId,
+      packCode,
+      quantity,
+      JSON.stringify(metadata || {}),
+    ]
+  );
 }
 
 function computeBoostMinutes(activateCount) {
@@ -124,14 +158,16 @@ async function getEntitlementsSnapshot(userId) {
   }
 }
 
-async function purchasePremium({ userId, planCode, transactionId }) {
-  const normalizedPlan = String(planCode || "").trim().toUpperCase();
-  const plan = PREMIUM_PLANS[normalizedPlan];
-  if (!plan) {
+async function purchasePremium({ userId, planCode, packCode, transactionId }) {
+  const product = await resolvePremiumProduct({ packCode, planCode });
+  if (!product) {
     const err = new Error("Invalid premium plan");
     err.code = "INVALID_PREMIUM_PLAN";
     throw err;
   }
+  const normalizedPlan = String(product.planCode || planCode || "").trim().toUpperCase();
+  const durationDays = Number(product.durationDays);
+  const amountRupees = Number(product.pricePaise) / 100;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -150,15 +186,19 @@ async function purchasePremium({ userId, planCode, transactionId }) {
            premium_status = 'ACTIVE',
            updated_at = NOW()
        WHERE id = $1`,
-      [userId, startAt, plan.days, normalizedPlan]
+      [userId, startAt, durationDays, normalizedPlan]
     );
-    await client.query(
-      `INSERT INTO user_purchases (user_id, product_type, transaction_id, status, purchased_at, pack_code, quantity, metadata)
-       VALUES ($1, 'PREMIUM', NULLIF($2, ''), 'SUCCESS', NOW(), $3, 1, jsonb_build_object('planCode', $3, 'durationDays', $4))`,
-      [userId, transactionId || null, plan.packCode, plan.days]
-    );
+    await insertPurchase(client, {
+      userId,
+      itemType: "SUBSCRIPTION",
+      packCode: product.packCode,
+      amountRupees,
+      quantity: 1,
+      transactionId,
+      metadata: { planCode: normalizedPlan, durationDays, packCode: product.packCode },
+    });
     await client.query("COMMIT");
-    debugLog("entitlement_premium_purchased", { userId, planCode: normalizedPlan });
+    debugLog("entitlement_premium_purchased", { userId, planCode: normalizedPlan, packCode: product.packCode });
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;
@@ -168,14 +208,14 @@ async function purchasePremium({ userId, planCode, transactionId }) {
   return getEntitlementsSnapshot(userId);
 }
 
-async function purchaseBoost({ userId, packSize, transactionId }) {
-  const size = Number(packSize);
-  const pack = BOOST_PACKS[size];
-  if (!pack) {
+async function purchaseBoost({ userId, packSize, packCode, transactionId }) {
+  const product = await resolvePackProduct("BOOST", { packCode, packSize });
+  if (!product) {
     const err = new Error("Invalid boost pack");
     err.code = "INVALID_BOOST_PACK";
     throw err;
   }
+  const amountRupees = Number(product.pricePaise) / 100;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -185,15 +225,19 @@ async function purchaseBoost({ userId, packSize, transactionId }) {
        ON CONFLICT (user_id)
        DO UPDATE SET remaining_credits = user_boost_wallet.remaining_credits + EXCLUDED.remaining_credits,
                      updated_at = NOW()`,
-      [userId, pack.quantity]
+      [userId, product.quantity]
     );
-    await client.query(
-      `INSERT INTO user_purchases (user_id, product_type, transaction_id, status, purchased_at, pack_code, quantity, metadata)
-       VALUES ($1, 'BOOST', NULLIF($2, ''), 'SUCCESS', NOW(), $3, $4, jsonb_build_object('packSize', $4))`,
-      [userId, transactionId || null, pack.packCode, pack.quantity]
-    );
+    await insertPurchase(client, {
+      userId,
+      itemType: "BOOST",
+      packCode: product.packCode,
+      amountRupees,
+      quantity: product.quantity,
+      transactionId,
+      metadata: { packCode: product.packCode, quantity: product.quantity },
+    });
     await client.query("COMMIT");
-    debugLog("entitlement_boost_purchased", { userId, packSize: pack.quantity });
+    debugLog("entitlement_boost_purchased", { userId, packCode: product.packCode, quantity: product.quantity });
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;
@@ -261,14 +305,14 @@ async function activateBoost({ userId, activateCount }) {
   return getEntitlementsSnapshot(userId);
 }
 
-async function purchaseComments({ userId, packSize, transactionId }) {
-  const size = Number(packSize);
-  const pack = COMMENT_PACKS[size];
-  if (!pack) {
+async function purchaseComments({ userId, packSize, packCode, transactionId }) {
+  const product = await resolvePackProduct("COMMENTS", { packCode, packSize });
+  if (!product) {
     const err = new Error("Invalid comments pack");
     err.code = "INVALID_COMMENTS_PACK";
     throw err;
   }
+  const amountRupees = Number(product.pricePaise) / 100;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -278,15 +322,19 @@ async function purchaseComments({ userId, packSize, transactionId }) {
        ON CONFLICT (user_id)
        DO UPDATE SET remaining_paid_comments = user_comment_wallet.remaining_paid_comments + EXCLUDED.remaining_paid_comments,
                      updated_at = NOW()`,
-      [userId, pack.quantity]
+      [userId, product.quantity]
     );
-    await client.query(
-      `INSERT INTO user_purchases (user_id, product_type, transaction_id, status, purchased_at, pack_code, quantity, metadata)
-       VALUES ($1, 'COMMENTS', NULLIF($2, ''), 'SUCCESS', NOW(), $3, $4, jsonb_build_object('packSize', $4))`,
-      [userId, transactionId || null, pack.packCode, pack.quantity]
-    );
+    await insertPurchase(client, {
+      userId,
+      itemType: "COMMENTS",
+      packCode: product.packCode,
+      amountRupees,
+      quantity: product.quantity,
+      transactionId,
+      metadata: { packCode: product.packCode, quantity: product.quantity },
+    });
     await client.query("COMMIT");
-    debugLog("entitlement_comments_purchased", { userId, packSize: pack.quantity });
+    debugLog("entitlement_comments_purchased", { userId, packCode: product.packCode, quantity: product.quantity });
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;

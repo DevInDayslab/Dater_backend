@@ -38,6 +38,7 @@ async function purchasePremium(req, res) {
     const snapshot = await entitlementsService.purchasePremium({
       userId: req.auth.userId,
       planCode: req.body?.planCode,
+      packCode: req.body?.packCode,
       transactionId: req.body?.transactionId,
     });
     return res.status(200).json({
@@ -60,6 +61,7 @@ async function purchaseBoost(req, res) {
     const snapshot = await entitlementsService.purchaseBoost({
       userId: req.auth.userId,
       packSize: req.body?.packSize,
+      packCode: req.body?.packCode,
       transactionId: req.body?.transactionId,
     });
     return res.status(200).json({
@@ -103,6 +105,7 @@ async function purchaseComments(req, res) {
     const snapshot = await entitlementsService.purchaseComments({
       userId: req.auth.userId,
       packSize: req.body?.packSize,
+      packCode: req.body?.packCode,
       transactionId: req.body?.transactionId,
     });
     return res.status(200).json({

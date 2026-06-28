@@ -10,6 +10,7 @@ const entitlementsRoutes = require("./routes/entitlements.routes");
 const feedRoutes = require("./routes/feed.routes");
 const chatRoutes = require("./routes/chat.routes");
 const storyRoutes = require("./routes/story.routes");
+const configRoutes = require("./routes/config.routes");
 const adminRoutes = require("./routes/admin/index");
 
 const app = express();
@@ -35,6 +36,7 @@ app.use("/api/v1/entitlements", entitlementsRoutes);
 app.use("/api/v1/feed", feedRoutes);
 app.use("/api/v1/chat", chatRoutes);
 app.use("/api/v1/stories", storyRoutes);
+app.use("/api/v1/config", configRoutes);
 app.use("/api/v1/admin", adminRoutes);
 
 module.exports = app;
