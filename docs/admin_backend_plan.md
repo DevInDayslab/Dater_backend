@@ -76,6 +76,13 @@ Use `account_state = 'BANNED'` — never `is_banned`.
 | `GET /api/v1/admin/reports/:reportId` | Report detail + context (CHAT messages / STORY media / PROFILE bio) |
 | `DELETE /api/v1/admin/reports/:reportId` | Dismiss report + `reconcileReportMilestonesAfterDismiss` |
 
-## Next phases
+## Phase 3 (implemented)
 
-- **Phase 3:** User trust mutations (ban/unban/warn), broadcast, settings
+### User mutations (`POST|PATCH /api/v1/admin/users/:userId/...`)
+- `warning`, `ban`, `unban`, `shadowban`, `pause`, `delete`, `profile` (PATCH), `grant-premium`, `revoke-session/:sessionId`
+
+### Broadcast (`/api/v1/admin/broadcast`)
+- `POST /audience-size`, `POST /`, `GET /history`
+
+### Settings (`/api/v1/admin/settings`)
+- `GET /admins`, `POST /admins`, `PATCH /admins/:adminId`

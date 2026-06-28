@@ -244,7 +244,59 @@ async function sendEventDataNotification({
   }
 }
 
+/**
+ * Admin broadcast: data-only FCM to active tokens, bypasses per-event preference toggles.
+ */
+async function sendAdminBroadcast({ title, body, deepLink = "", tokens }) {
+  const cleanTokens = [...new Set(tokens.map((t) => String(t || "").trim()).filter(Boolean))];
+  if (cleanTokens.length === 0) {
+    return { attempted: 0, successCount: 0, failureCount: 0 };
+  }
+
+  const messaging = getMessaging();
+  if (!messaging) {
+    console.warn("[push] admin broadcast skipped: Firebase Admin not initialized");
+    return { attempted: cleanTokens.length, successCount: 0, failureCount: cleanTokens.length };
+  }
+
+  const data = buildDataPayload({
+    type: "ADMIN_BROADCAST",
+    title: String(title || "").trim(),
+    body: String(body || "").trim(),
+    extra: deepLink ? { deepLink: String(deepLink).trim() } : {},
+  });
+
+  let successCount = 0;
+  let failureCount = 0;
+  const batchSize = 500;
+
+  for (let i = 0; i < cleanTokens.length; i += batchSize) {
+    const batch = cleanTokens.slice(i, i + batchSize);
+    const result = await messaging.sendEachForMulticast({
+      tokens: batch,
+      data,
+      android: { priority: "high" },
+    });
+    successCount += result.successCount;
+    failureCount += result.failureCount;
+    result.responses.forEach((r, idx) => {
+      if (!r.success) {
+        const code = String(r.error?.code || "");
+        if (
+          code.includes("registration-token-not-registered") ||
+          code.includes("invalid-registration-token")
+        ) {
+          deactivatePushToken(batch[idx]).catch(() => {});
+        }
+      }
+    });
+  }
+
+  return { attempted: cleanTokens.length, successCount, failureCount };
+}
+
 module.exports = {
   sendEventDataNotification,
+  sendAdminBroadcast,
 };
 

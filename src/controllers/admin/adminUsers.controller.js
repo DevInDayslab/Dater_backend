@@ -1,7 +1,20 @@
 const adminUsersService = require("../../services/admin/adminUsers.service");
+const adminUserMutations = require("../../services/admin/adminUserMutations.service");
 
 function notFound(res, message = "User not found") {
   return res.status(404).json({ success: false, message });
+}
+
+function mutationError(res, error, fallbackMessage) {
+  const code = error.code;
+  if (code === "INVALID_UNTIL" || code === "EMPTY_PATCH" || code === "INVALID_PLAN_CODE") {
+    return res.status(400).json({ success: false, message: error.message, code });
+  }
+  return res.status(500).json({
+    success: false,
+    message: fallbackMessage,
+    error: error.message,
+  });
 }
 
 async function listUsers(req, res) {
@@ -205,6 +218,147 @@ async function getRevenue(req, res) {
   }
 }
 
+async function issueWarning(req, res) {
+  try {
+    const result = await adminUserMutations.issueWarning(req.params.userId, req.body || {});
+    if (result.notFound) return notFound(res);
+    return res.status(200).json({
+      success: true,
+      message: "Warning issued",
+      data: result,
+    });
+  } catch (error) {
+    return mutationError(res, error, "Failed to issue warning");
+  }
+}
+
+async function banUser(req, res) {
+  try {
+    const result = await adminUserMutations.banUser(req.params.userId, req.body || {});
+    if (result.notFound) return notFound(res);
+    return res.status(200).json({
+      success: true,
+      message: "User banned",
+      data: result,
+    });
+  } catch (error) {
+    return mutationError(res, error, "Failed to ban user");
+  }
+}
+
+async function unbanUser(req, res) {
+  try {
+    const result = await adminUserMutations.unbanUser(req.params.userId);
+    if (result.notFound) return notFound(res);
+    return res.status(200).json({
+      success: true,
+      message: "User unbanned",
+      data: result,
+    });
+  } catch (error) {
+    return mutationError(res, error, "Failed to unban user");
+  }
+}
+
+async function shadowbanUser(req, res) {
+  try {
+    const result = await adminUserMutations.shadowbanUser(req.params.userId, req.body || {});
+    if (result.notFound) return notFound(res);
+    return res.status(200).json({
+      success: true,
+      message: "User hidden by moderation",
+      data: result,
+    });
+  } catch (error) {
+    return mutationError(res, error, "Failed to shadowban user");
+  }
+}
+
+async function pauseUser(req, res) {
+  try {
+    const until = req.body?.until ?? req.body?.pausedUntil ?? null;
+    const result = await adminUserMutations.pauseUser(req.params.userId, { until });
+    if (result.notFound) return notFound(res);
+    return res.status(200).json({
+      success: true,
+      message: "User paused",
+      data: result,
+    });
+  } catch (error) {
+    return mutationError(res, error, "Failed to pause user");
+  }
+}
+
+async function deleteUser(req, res) {
+  try {
+    const result = await adminUserMutations.deleteUser(req.params.userId);
+    if (result.notFound) return notFound(res);
+    return res.status(200).json({
+      success: true,
+      message: result.alreadyDeleted ? "User already deleted" : "User deleted",
+      data: result,
+    });
+  } catch (error) {
+    return mutationError(res, error, "Failed to delete user");
+  }
+}
+
+async function patchProfile(req, res) {
+  try {
+    const { name, bio, presetMessage } = req.body || {};
+    const result = await adminUserMutations.patchProfile(req.params.userId, {
+      name,
+      bio,
+      presetMessage,
+    });
+    if (result.notFound) return notFound(res);
+    return res.status(200).json({
+      success: true,
+      message: "Profile updated",
+      data: result,
+    });
+  } catch (error) {
+    return mutationError(res, error, "Failed to update profile");
+  }
+}
+
+async function grantPremium(req, res) {
+  try {
+    const { planCode, expiresAt } = req.body || {};
+    const result = await adminUserMutations.grantPremium(req.params.userId, {
+      planCode,
+      expiresAt,
+    });
+    if (result.notFound) return notFound(res);
+    return res.status(200).json({
+      success: true,
+      message: "Premium granted",
+      data: result,
+    });
+  } catch (error) {
+    return mutationError(res, error, "Failed to grant premium");
+  }
+}
+
+async function revokeSession(req, res) {
+  try {
+    const result = await adminUserMutations.revokeSession(
+      req.params.userId,
+      req.params.sessionId
+    );
+    if (result.notFound) {
+      return res.status(404).json({ success: false, message: "Session not found" });
+    }
+    return res.status(200).json({
+      success: true,
+      message: "Session revoked",
+      data: result,
+    });
+  } catch (error) {
+    return mutationError(res, error, "Failed to revoke session");
+  }
+}
+
 module.exports = {
   listUsers,
   getProfile,
@@ -217,4 +371,13 @@ module.exports = {
   getChatMessages,
   getSocial,
   getRevenue,
+  issueWarning,
+  banUser,
+  unbanUser,
+  shadowbanUser,
+  pauseUser,
+  deleteUser,
+  patchProfile,
+  grantPremium,
+  revokeSession,
 };
