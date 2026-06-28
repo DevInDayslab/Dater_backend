@@ -9,7 +9,8 @@ const {
 assert.strictEqual(formatInrPaise(49900), "₹499");
 assert.strictEqual(formatInrPaise(49900, { spaced: true }), "₹ 499");
 assert.strictEqual(formatInrPaise(219900), "₹2,199");
-assert.strictEqual(buildPremiumButtonLabel("WEEK", 49900), "Get 1 week for ₹499");
+assert.strictEqual(buildPremiumButtonLabel("1", "Week", 49900), "Get 1 week for ₹499");
+assert.strictEqual(buildPremiumButtonLabel("10", "Days", 49900), "Get 10 days for ₹499");
 assert.strictEqual(buildPackButtonLabel(3, "Boosts", 19900), "Get 3 boost for ₹199");
 
 const mapped = mapProductRow({

@@ -1,5 +1,6 @@
 const { query } = require("../../config/db");
 const productConfigService = require("../productConfig.service");
+const { durationDaysFromDisplay } = require("../../utils/productFormatting");
 
 async function listProducts() {
   return productConfigService.loadAllProducts();
@@ -59,6 +60,11 @@ async function updateProducts(updates = []) {
       throw err;
     }
 
+    const displayTitle =
+      item.displayTitle != null ? String(item.displayTitle).trim() : null;
+    const displayLabel =
+      item.displayLabel != null ? String(item.displayLabel).trim() : null;
+
     const fields = [];
     const values = [];
     let idx = 1;
@@ -66,6 +72,14 @@ async function updateProducts(updates = []) {
     if (pricePaise != null) {
       fields.push(`price_paise = $${idx++}`);
       values.push(pricePaise);
+    }
+    if (displayTitle != null && displayTitle !== "") {
+      fields.push(`display_title = $${idx++}`);
+      values.push(displayTitle);
+    }
+    if (displayLabel != null && displayLabel !== "") {
+      fields.push(`display_label = $${idx++}`);
+      values.push(displayLabel);
     }
     if (quantity != null) {
       fields.push(`quantity = $${idx++}`);
@@ -75,7 +89,29 @@ async function updateProducts(updates = []) {
         values.push(String(quantity));
       }
     }
-    if (durationDays != null) {
+    if (existing.category === "PREMIUM") {
+      const nextTitle = displayTitle ?? null;
+      const nextLabel = displayLabel ?? null;
+      if (nextTitle != null || nextLabel != null) {
+        const currentRes = await query(
+          `SELECT display_title, display_label
+           FROM product_configurations
+           WHERE pack_code = $1`,
+          [packCode]
+        );
+        const current = currentRes.rows[0] || {};
+        const resolvedTitle = nextTitle ?? current.display_title;
+        const resolvedLabel = nextLabel ?? current.display_label;
+        const computedDays = durationDaysFromDisplay(resolvedTitle, resolvedLabel);
+        if (computedDays != null) {
+          fields.push(`duration_days = $${idx++}`);
+          values.push(computedDays);
+        }
+      } else if (durationDays != null) {
+        fields.push(`duration_days = $${idx++}`);
+        values.push(durationDays);
+      }
+    } else if (durationDays != null) {
       fields.push(`duration_days = $${idx++}`);
       values.push(durationDays);
     }

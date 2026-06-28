@@ -9,13 +9,24 @@ function compactInrPaise(paise) {
   return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(rupees);
 }
 
-function buildPremiumButtonLabel(planCode, pricePaise) {
+function durationDaysFromDisplay(displayTitle, displayLabel) {
+  const amount = Number(displayTitle);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const unit = String(displayLabel || "")
+    .trim()
+    .toLowerCase();
+  if (unit === "day" || unit === "days") return Math.round(amount);
+  if (unit === "week" || unit === "weeks") return Math.round(amount * 7);
+  if (unit === "month" || unit === "months") return Math.round(amount * 30);
+  return Math.round(amount);
+}
+
+function buildPremiumButtonLabel(displayTitle, displayLabel, pricePaise) {
   const price = compactInrPaise(pricePaise);
-  const normalized = String(planCode || "").toUpperCase();
-  if (normalized === "WEEK") return `Get 1 week for ₹${price}`;
-  if (normalized === "MONTH") return `Get 1 month for ₹${price}`;
-  if (normalized === "THREE_MONTHS") return `Get 3 months for ₹${price}`;
-  return `Get premium for ₹${price}`;
+  const amount = String(displayTitle || "").trim();
+  const unit = String(displayLabel || "").trim().toLowerCase();
+  if (!amount || !unit) return `Get premium for ₹${price}`;
+  return `Get ${amount} ${unit} for ₹${price}`;
 }
 
 function buildPackButtonLabel(quantity, label, pricePaise) {
@@ -37,7 +48,7 @@ function mapProductRow(row) {
       : formatInrPaise(pricePaise);
   const buttonLabel =
     category === "PREMIUM"
-      ? buildPremiumButtonLabel(row.plan_code, pricePaise)
+      ? buildPremiumButtonLabel(row.display_title, row.display_label, pricePaise)
       : buildPackButtonLabel(row.quantity, row.display_label, pricePaise);
 
   return {
@@ -67,6 +78,7 @@ function mapProductRow(row) {
 module.exports = {
   formatInrPaise,
   compactInrPaise,
+  durationDaysFromDisplay,
   buildPremiumButtonLabel,
   buildPackButtonLabel,
   mapProductRow,
