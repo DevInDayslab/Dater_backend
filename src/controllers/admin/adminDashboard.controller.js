@@ -53,8 +53,45 @@ async function getBadges(req, res) {
   }
 }
 
+async function getBreakdowns(req, res) {
+  try {
+    const breakdowns = await adminDashboardService.getDashboardBreakdowns();
+    return res.status(200).json({
+      success: true,
+      message: "Dashboard breakdowns fetched",
+      data: breakdowns,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch dashboard breakdowns",
+      error: error.message,
+    });
+  }
+}
+
+async function getRevenue(req, res) {
+  try {
+    const window = req.query.window || "30d";
+    const revenue = await adminDashboardService.getDashboardRevenue(window);
+    return res.status(200).json({
+      success: true,
+      message: "Dashboard revenue fetched",
+      data: revenue,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch dashboard revenue",
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   getStats,
   getGrowth,
   getBadges,
+  getBreakdowns,
+  getRevenue,
 };
