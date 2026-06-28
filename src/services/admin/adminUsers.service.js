@@ -1,5 +1,6 @@
 const { query, pool } = require("../../config/db");
 const { presignMediaUrl } = require("./adminPresign.service");
+const { withAdminReportDisplay } = require("../../utils/adminReportDisplay");
 const { loadUserFiltersDetail } = require("./filtersSnapshot.service");
 
 const FREE_TIER_DAILY_PROFILE_VIEWS = 20;
@@ -410,18 +411,20 @@ async function getUserVerification(userId) {
 }
 
 function mapReportRow(row) {
+  const adminDisplay = withAdminReportDisplay(row);
   return {
     id: row.id,
-    reporterId: row.reporter_id,
-    reporterName: row.reporter_name || "Unknown",
+    reporterId: adminDisplay?.reporterId ?? row.reporter_id,
+    reporterName: adminDisplay?.reporterName ?? row.reporter_name || "Unknown",
     reportedId: row.reported_id,
     reportedName: row.reported_name || "Unknown",
     contentType: row.content_type,
-    reason: row.reason,
+    reason: adminDisplay?.reason ?? row.reason,
     status: row.status,
     createdAt: toIso(row.created_at),
     chatThreadId: row.chat_thread_id || null,
     storyId: row.story_id || null,
+    filedByAdmin: Boolean(adminDisplay),
   };
 }
 
@@ -739,7 +742,7 @@ async function getUserRevenue(userId) {
 
   const today = new Date().toISOString().slice(0, 10);
 
-  const [boostWalletRes, commentWalletRes, boostActiveRes, purchasesRes, unlocksRes, usageRes] =
+  const [boostWalletRes, commentWalletRes, boostActiveRes, boostHistoryRes, purchasesRes, unlocksRes, usageRes] =
     await Promise.all([
       query(`SELECT remaining_credits FROM user_boost_wallet WHERE user_id = $1 LIMIT 1`, [userId]),
       query(`SELECT remaining_paid_comments FROM user_comment_wallet WHERE user_id = $1 LIMIT 1`, [userId]),
@@ -749,6 +752,13 @@ async function getUserRevenue(userId) {
          WHERE user_id = $1 AND expires_at > NOW()
          ORDER BY expires_at DESC
          LIMIT 1`,
+        [userId]
+      ),
+      query(
+        `SELECT id, activated_count, started_at, expires_at, created_at
+         FROM user_boost_activations
+         WHERE user_id = $1
+         ORDER BY started_at DESC`,
         [userId]
       ),
       query(
@@ -788,6 +798,7 @@ async function getUserRevenue(userId) {
     amount: Number(p.amount || 0),
     quantity: p.quantity != null ? Number(p.quantity) : null,
     transactionId: p.transaction_id,
+    paymentStatus: p.transaction_id ? "SUCCESS" : "PENDING",
     createdAt: toIso(p.created_at),
   }));
 
@@ -799,6 +810,13 @@ async function getUserRevenue(userId) {
   };
 
   const activeBoostRow = boostActiveRes.rows[0];
+  const boostActivations = boostHistoryRes.rows.map((row) => ({
+    id: row.id,
+    activatedCount: Number(row.activated_count),
+    startedAt: toIso(row.started_at),
+    expiresAt: toIso(row.expires_at),
+    isActive: new Date(row.expires_at).getTime() > Date.now(),
+  }));
 
   return {
     premiumStatus: user.premium_status,
@@ -819,6 +837,7 @@ async function getUserRevenue(userId) {
           expiresAt: toIso(activeBoostRow.expires_at),
         }
       : null,
+    boostActivations,
     purchases,
     purchaseCounts,
     chatUnlocks: unlocksRes.rows.map((r) => ({

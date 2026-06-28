@@ -2,6 +2,7 @@ const { query, pool } = require("../../config/db");
 const moderationReports = require("../moderationReports.service");
 const { presignMediaUrl } = require("./adminPresign.service");
 const adminUsersService = require("./adminUsers.service");
+const { withAdminReportDisplay } = require("../../utils/adminReportDisplay");
 
 function parsePagination(queryParams) {
   const page = Math.max(Number.parseInt(queryParams.page, 10) || 1, 1);
@@ -14,18 +15,20 @@ function toIso(value) {
 }
 
 function mapReportListRow(row) {
+  const adminDisplay = withAdminReportDisplay(row);
   return {
     id: row.id,
-    reporterId: row.reporter_id,
-    reporterName: row.reporter_name || "Unknown",
+    reporterId: adminDisplay?.reporterId ?? row.reporter_id,
+    reporterName: adminDisplay?.reporterName ?? row.reporter_name || "Unknown",
     reportedId: row.reported_id,
     reportedName: row.reported_name || "Unknown",
     contentType: row.content_type,
-    reason: row.reason,
+    reason: adminDisplay?.reason ?? row.reason,
     status: row.status,
     createdAt: toIso(row.created_at),
     chatThreadId: row.chat_thread_id || null,
     storyId: row.story_id || null,
+    filedByAdmin: Boolean(adminDisplay),
     reportedUserWarningCount: Number(row.reported_user_warning_count || 0),
     reportedUserAccountState: row.reported_user_account_state,
     storyPreviewUrl: row.story_preview_url || null,
