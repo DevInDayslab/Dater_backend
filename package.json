@@ -31,6 +31,7 @@
     "dev:grant-premium": "node src/scripts/grantPremiumDev.js",
     "dev:grant-boost": "node src/scripts/grantBoostDev.js",
     "dev:grant-comments": "node src/scripts/grantCommentsDev.js",
+    "seed:admin": "node src/scripts/seedAdminUser.js",
     "start": "node src/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
