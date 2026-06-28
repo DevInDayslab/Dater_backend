@@ -19,7 +19,7 @@ function mapReportListRow(row) {
   return {
     id: row.id,
     reporterId: adminDisplay?.reporterId ?? row.reporter_id,
-    reporterName: adminDisplay?.reporterName ?? row.reporter_name || "Unknown",
+    reporterName: adminDisplay?.reporterName ?? (row.reporter_name || "Unknown"),
     reportedId: row.reported_id,
     reportedName: row.reported_name || "Unknown",
     contentType: row.content_type,
