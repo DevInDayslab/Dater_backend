@@ -7,7 +7,7 @@ function notFound(res, message = "User not found") {
 
 function mutationError(res, error, fallbackMessage) {
   const code = error.code;
-  if (code === "INVALID_UNTIL" || code === "EMPTY_PATCH" || code === "INVALID_PLAN_CODE") {
+  if (code === "INVALID_UNTIL" || code === "EMPTY_PATCH" || code === "INVALID_PLAN_CODE" || code === "INVALID_REPORT_REASON" || code === "MODERATION_REPORTER_NOT_CONFIGURED") {
     return res.status(400).json({ success: false, message: error.message, code });
   }
   return res.status(500).json({
@@ -218,6 +218,23 @@ async function getRevenue(req, res) {
   }
 }
 
+async function fileReport(req, res) {
+  try {
+    const result = await adminUserMutations.fileReport(req.params.userId, {
+      reason: req.body?.reason,
+      adminName: req.admin?.name || null,
+    });
+    if (result.notFound) return notFound(res);
+    return res.status(200).json({
+      success: true,
+      message: "Report filed",
+      data: result,
+    });
+  } catch (error) {
+    return mutationError(res, error, "Failed to file report");
+  }
+}
+
 async function issueWarning(req, res) {
   try {
     const result = await adminUserMutations.issueWarning(req.params.userId, req.body || {});
@@ -371,6 +388,7 @@ module.exports = {
   getChatMessages,
   getSocial,
   getRevenue,
+  fileReport,
   issueWarning,
   banUser,
   unbanUser,

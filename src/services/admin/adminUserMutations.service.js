@@ -1,6 +1,17 @@
 const { query, pool } = require("../../config/db");
 
+const moderationReports = require("../moderationReports.service");
+
 const VALID_PREMIUM_PLANS = new Set(["PREMIUM_WEEK", "PREMIUM_MONTH", "PREMIUM_THREE_MONTHS"]);
+const VALID_REPORT_REASONS = new Set([
+  "Fake Profile",
+  "Inappropriate Content",
+  "Scam or Commercial",
+  "Hate Speech",
+  "Off Dater behaviour",
+  "Underage",
+  "Rude or abusive behaviour",
+]);
 
 const PLAN_DAYS = {
   PREMIUM_WEEK: 7,
@@ -333,6 +344,86 @@ async function revokeSession(userId, sessionId) {
   };
 }
 
+async function resolveModerationReporterUserId(client, reportedUserId) {
+  const configured = String(process.env.ADMIN_MODERATION_REPORTER_USER_ID || "").trim();
+  if (configured) {
+    const configuredRes = await client.query(
+      `SELECT id FROM users WHERE id = $1::uuid AND id <> $2::uuid AND deleted_at IS NULL`,
+      [configured, reportedUserId]
+    );
+    if (configuredRes.rows[0]) return configuredRes.rows[0].id;
+  }
+
+  const fallbackRes = await client.query(
+    `SELECT id
+     FROM users
+     WHERE deleted_at IS NULL
+       AND id <> $1::uuid
+     ORDER BY created_at ASC
+     LIMIT 1`,
+    [reportedUserId]
+  );
+  if (!fallbackRes.rows[0]) {
+    const error = new Error(
+      "No reporter user available. Set ADMIN_MODERATION_REPORTER_USER_ID in backend/.env."
+    );
+    error.code = "MODERATION_REPORTER_NOT_CONFIGURED";
+    throw error;
+  }
+  return fallbackRes.rows[0].id;
+}
+
+async function fileReport(reportedUserId, { reason, adminName } = {}) {
+  const normalizedReason = String(reason || "").trim();
+  if (!normalizedReason || !VALID_REPORT_REASONS.has(normalizedReason)) {
+    const error = new Error("A valid report reason is required");
+    error.code = "INVALID_REPORT_REASON";
+    throw error;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const reportedRes = await client.query(
+      `SELECT id FROM users WHERE id = $1::uuid AND deleted_at IS NULL FOR UPDATE`,
+      [reportedUserId]
+    );
+    if (!reportedRes.rows[0]) {
+      await client.query("ROLLBACK");
+      return { notFound: true };
+    }
+
+    const reporterId = await resolveModerationReporterUserId(client, reportedUserId);
+    const reasonWithAdmin = adminName
+      ? `[Admin: ${adminName}] ${normalizedReason}`
+      : `[Admin] ${normalizedReason}`;
+
+    const insertRes = await client.query(
+      `INSERT INTO reports (reporter_id, reported_id, content_type, reason)
+       VALUES ($1::uuid, $2::uuid, 'PROFILE'::report_content_type_enum, $3)
+       RETURNING id, created_at, status`,
+      [reporterId, reportedUserId, reasonWithAdmin]
+    );
+    const report = insertRes.rows[0];
+    const agg = await moderationReports.applyReportMilestonesForReportedUser(client, reportedUserId);
+
+    await client.query("COMMIT");
+    return {
+      reportId: report.id,
+      createdAt: toIso(report.created_at),
+      status: report.status,
+      reason: reasonWithAdmin,
+      ...agg,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   issueWarning,
   banUser,
@@ -343,4 +434,5 @@ module.exports = {
   patchProfile,
   grantPremium,
   revokeSession,
+  fileReport,
 };

@@ -5,6 +5,7 @@ const router = express.Router();
 
 router.get("/", adminUsersController.listUsers);
 
+router.post("/:userId/report", adminUsersController.fileReport);
 router.post("/:userId/warning", adminUsersController.issueWarning);
 router.post("/:userId/ban", adminUsersController.banUser);
 router.post("/:userId/unban", adminUsersController.unbanUser);
