@@ -14,6 +14,9 @@ router.post("/:userId/pause", adminUsersController.pauseUser);
 router.post("/:userId/delete", adminUsersController.deleteUser);
 router.patch("/:userId/profile", adminUsersController.patchProfile);
 router.post("/:userId/grant-premium", adminUsersController.grantPremium);
+router.post("/:userId/remove-premium", adminUsersController.removePremium);
+router.post("/:userId/grant-boosts", adminUsersController.grantBoostCredits);
+router.post("/:userId/grant-comments", adminUsersController.grantCommentCredits);
 router.post("/:userId/revoke-session/:sessionId", adminUsersController.revokeSession);
 
 router.get("/:userId/profile", adminUsersController.getProfile);

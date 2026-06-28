@@ -2,7 +2,13 @@ const { query, pool } = require("../../config/db");
 
 const moderationReports = require("../moderationReports.service");
 
-const VALID_PREMIUM_PLANS = new Set(["PREMIUM_WEEK", "PREMIUM_MONTH", "PREMIUM_THREE_MONTHS"]);
+const VALID_PREMIUM_PLANS = new Set([
+  "PREMIUM_DAY",
+  "PREMIUM_WEEK",
+  "PREMIUM_MONTH",
+  "PREMIUM_THREE_MONTHS",
+  "PREMIUM_SIX_MONTHS",
+]);
 const VALID_REPORT_REASONS = new Set([
   "Fake Profile",
   "Inappropriate Content",
@@ -14,9 +20,18 @@ const VALID_REPORT_REASONS = new Set([
 ]);
 
 const PLAN_DAYS = {
+  PREMIUM_DAY: 1,
   PREMIUM_WEEK: 7,
   PREMIUM_MONTH: 30,
   PREMIUM_THREE_MONTHS: 90,
+  PREMIUM_SIX_MONTHS: 180,
+};
+
+const DURATION_TO_PLAN = {
+  1: "PREMIUM_DAY",
+  7: "PREMIUM_WEEK",
+  30: "PREMIUM_MONTH",
+  180: "PREMIUM_SIX_MONTHS",
 };
 
 function toIso(value) {
@@ -287,17 +302,28 @@ async function patchProfile(userId, { name, bio, presetMessage } = {}) {
   };
 }
 
-async function grantPremium(userId, { planCode, expiresAt } = {}) {
-  const code = String(planCode || "").trim().toUpperCase();
-  if (!VALID_PREMIUM_PLANS.has(code)) {
+async function grantPremium(userId, { planCode, expiresAt, durationDays } = {}) {
+  let code = String(planCode || "").trim().toUpperCase();
+  let days = null;
+
+  if (durationDays != null) {
+    days = Number(durationDays);
+    if (!Number.isFinite(days) || !DURATION_TO_PLAN[days]) {
+      const err = new Error("Invalid premium duration");
+      err.code = "INVALID_DURATION";
+      throw err;
+    }
+    code = DURATION_TO_PLAN[days];
+  } else if (!VALID_PREMIUM_PLANS.has(code)) {
     const err = new Error("Invalid premium plan code");
     err.code = "INVALID_PLAN_CODE";
     throw err;
+  } else {
+    days = PLAN_DAYS[code] || 30;
   }
 
   let premiumExpiresAt = expiresAt ? new Date(expiresAt) : null;
   if (!premiumExpiresAt || Number.isNaN(premiumExpiresAt.getTime())) {
-    const days = PLAN_DAYS[code] || 30;
     premiumExpiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
   }
 
@@ -324,6 +350,86 @@ async function grantPremium(userId, { planCode, expiresAt } = {}) {
     premiumStartedAt: toIso(row.premium_started_at),
     premiumExpiresAt: toIso(row.premium_expires_at),
     isPremium: Boolean(row.is_premium),
+  };
+}
+
+async function removePremium(userId) {
+  const res = await query(
+    `UPDATE users
+     SET premium_status = 'INACTIVE',
+         premium_plan_code = NULL,
+         premium_started_at = NULL,
+         premium_expires_at = NULL,
+         is_premium = FALSE,
+         updated_at = NOW()
+     WHERE id = $1::uuid
+       AND deleted_at IS NULL
+     RETURNING id, premium_status, premium_plan_code, premium_expires_at, is_premium`,
+    [userId]
+  );
+  if (!res.rows[0]) return { notFound: true };
+
+  const row = res.rows[0];
+  return {
+    userId: row.id,
+    premiumStatus: row.premium_status,
+    premiumPlanCode: row.premium_plan_code,
+    premiumExpiresAt: toIso(row.premium_expires_at),
+    isPremium: Boolean(row.is_premium),
+  };
+}
+
+async function grantBoostCredits(userId, { amount } = {}) {
+  const credits = Number(amount);
+  if (!Number.isFinite(credits) || credits < 1 || credits > 9999) {
+    const err = new Error("Boost amount must be between 1 and 9999");
+    err.code = "INVALID_BOOST_AMOUNT";
+    throw err;
+  }
+
+  const res = await query(
+    `INSERT INTO user_boost_wallet (user_id, remaining_credits, updated_at)
+     VALUES ($1::uuid, $2, NOW())
+     ON CONFLICT (user_id)
+     DO UPDATE SET
+       remaining_credits = user_boost_wallet.remaining_credits + EXCLUDED.remaining_credits,
+       updated_at = NOW()
+     RETURNING user_id, remaining_credits`,
+    [userId, credits]
+  );
+  if (!res.rows[0]) return { notFound: true };
+
+  return {
+    userId: res.rows[0].user_id,
+    remainingCredits: Number(res.rows[0].remaining_credits),
+    granted: credits,
+  };
+}
+
+async function grantCommentCredits(userId, { amount } = {}) {
+  const comments = Number(amount);
+  if (!Number.isFinite(comments) || comments < 1 || comments > 9999) {
+    const err = new Error("Comment amount must be between 1 and 9999");
+    err.code = "INVALID_COMMENT_AMOUNT";
+    throw err;
+  }
+
+  const res = await query(
+    `INSERT INTO user_comment_wallet (user_id, remaining_paid_comments, updated_at)
+     VALUES ($1::uuid, $2, NOW())
+     ON CONFLICT (user_id)
+     DO UPDATE SET
+       remaining_paid_comments = user_comment_wallet.remaining_paid_comments + EXCLUDED.remaining_paid_comments,
+       updated_at = NOW()
+     RETURNING user_id, remaining_paid_comments`,
+    [userId, comments]
+  );
+  if (!res.rows[0]) return { notFound: true };
+
+  return {
+    userId: res.rows[0].user_id,
+    remainingPaidComments: Number(res.rows[0].remaining_paid_comments),
+    granted: comments,
   };
 }
 
@@ -433,6 +539,9 @@ module.exports = {
   deleteUser,
   patchProfile,
   grantPremium,
+  removePremium,
+  grantBoostCredits,
+  grantCommentCredits,
   revokeSession,
   fileReport,
 };

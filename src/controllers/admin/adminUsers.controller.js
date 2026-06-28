@@ -341,10 +341,11 @@ async function patchProfile(req, res) {
 
 async function grantPremium(req, res) {
   try {
-    const { planCode, expiresAt } = req.body || {};
+    const { planCode, expiresAt, durationDays } = req.body || {};
     const result = await adminUserMutations.grantPremium(req.params.userId, {
       planCode,
       expiresAt,
+      durationDays,
     });
     if (result.notFound) return notFound(res);
     return res.status(200).json({
@@ -354,6 +355,50 @@ async function grantPremium(req, res) {
     });
   } catch (error) {
     return mutationError(res, error, "Failed to grant premium");
+  }
+}
+
+async function removePremium(req, res) {
+  try {
+    const result = await adminUserMutations.removePremium(req.params.userId);
+    if (result.notFound) return notFound(res);
+    return res.status(200).json({
+      success: true,
+      message: "Premium removed",
+      data: result,
+    });
+  } catch (error) {
+    return mutationError(res, error, "Failed to remove premium");
+  }
+}
+
+async function grantBoostCredits(req, res) {
+  try {
+    const amount = req.body?.amount ?? req.body?.credits;
+    const result = await adminUserMutations.grantBoostCredits(req.params.userId, { amount });
+    if (result.notFound) return notFound(res);
+    return res.status(200).json({
+      success: true,
+      message: "Boost credits granted",
+      data: result,
+    });
+  } catch (error) {
+    return mutationError(res, error, "Failed to grant boost credits");
+  }
+}
+
+async function grantCommentCredits(req, res) {
+  try {
+    const amount = req.body?.amount ?? req.body?.comments;
+    const result = await adminUserMutations.grantCommentCredits(req.params.userId, { amount });
+    if (result.notFound) return notFound(res);
+    return res.status(200).json({
+      success: true,
+      message: "Comment credits granted",
+      data: result,
+    });
+  } catch (error) {
+    return mutationError(res, error, "Failed to grant comment credits");
   }
 }
 
@@ -397,5 +442,8 @@ module.exports = {
   deleteUser,
   patchProfile,
   grantPremium,
+  removePremium,
+  grantBoostCredits,
+  grantCommentCredits,
   revokeSession,
 };
