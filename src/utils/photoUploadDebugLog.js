@@ -1,7 +1,6 @@
 const { debugLog, shouldLog } = require("./serverDebugLog");
 const {
   MIN_FACE_CONFIDENCE,
-  MIN_GENDER_CONFIDENCE,
   MIN_PRIMARY_FACE_AREA_FRACTION,
 } = require("../services/photoFaceValidation.service");
 const { MIN_CONFIDENCE: MIN_MODERATION_CONFIDENCE } = require("../services/photoModeration.service");
@@ -47,15 +46,6 @@ function serializeFacesForLog(faceDetails) {
   });
 }
 
-function buildGenderContextLog(genderContext, genderAlignment) {
-  return {
-    genderMain: genderContext?.genderMain ?? "",
-    genderMoreOptions: genderContext?.moreOptions ?? [],
-    profileRequiresFemaleFace: genderAlignment?.requiresFemale === true,
-    genderCheckSkipped: genderAlignment?.skipped === true,
-  };
-}
-
 /**
  * One object to grep: photo_confirm_scan
  */
@@ -64,14 +54,12 @@ function logPhotoConfirmScan(ctx, scan) {
 
   const moderation = scan?.moderation || {};
   const facePresence = scan?.facePresence || {};
-  const genderAlignment = scan?.genderAlignment || {};
 
   debugLog("photo_confirm_scan", {
     ...ctx,
     thresholds: {
       moderationMinConfidence: MIN_MODERATION_CONFIDENCE,
       faceMinConfidence: MIN_FACE_CONFIDENCE,
-      genderMinConfidence: MIN_GENDER_CONFIDENCE,
       faceMinBboxAreaFraction: MIN_PRIMARY_FACE_AREA_FRACTION,
     },
     moderation: {
@@ -90,15 +78,6 @@ function logPhotoConfirmScan(ctx, scan) {
       primaryGenderValue: facePresence.primaryGenderValue ?? null,
       primaryGenderConfidence: round1(facePresence.primaryGenderConfidence),
     },
-    genderAlignment: {
-      passed: genderAlignment.passed === true,
-      code: genderAlignment.code ?? null,
-      detectedValue: genderAlignment.detectedValue ?? null,
-      detectedConfidence: round1(genderAlignment.detectedConfidence),
-      requiresFemale: genderAlignment.requiresFemale === true,
-      skipped: genderAlignment.skipped === true,
-    },
-    genderContext: buildGenderContextLog(scan?.genderContext, genderAlignment),
     facesDetected: serializeFacesForLog(scan?.faceDetails),
     faceSummary: scan?.faceSummary ?? null,
     sourceWebpBytes: scan?.sourceWebpBytes,
@@ -108,7 +87,7 @@ function logPhotoConfirmScan(ctx, scan) {
 
 /**
  * Grep: photo_confirm_REJECTED
- * @param {string} step - MODERATION | FACE_PRESENCE | GENDER | FACE_COMPARE | FACE_COMPARE_ERROR
+ * @param {string} step - MODERATION | FACE_PRESENCE | FACE_COMPARE | FACE_COMPARE_ERROR
  */
 function logPhotoConfirmRejected(ctx, step, code, detail = {}) {
   if (!shouldLog()) return;

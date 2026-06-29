@@ -283,7 +283,7 @@ async function confirmPhotoUpload(req, res) {
 
     let scan = null;
     try {
-      scan = await photoModeration.scanS3ObjectForUploadValidation(row.s3_key, userId);
+      scan = await photoModeration.scanS3ObjectForUploadValidation(row.s3_key);
       photoUploadDebugLog.logPhotoConfirmScan(confirmCtx, scan);
     } catch (e) {
       if (isS3ObjectMissingError(e)) {
@@ -341,30 +341,6 @@ async function confirmPhotoUpload(req, res) {
                   : "Primary face confidence below threshold",
           },
           multipleFaces: scan.facePresence.multipleFaces === true,
-        })
-      );
-    }
-
-    if (!scan.genderAlignment.passed && scan.genderAlignment.requiresFemale) {
-      return res.status(200).json(
-        await rejectPhotoHard(userId, row.id, row.s3_key, "GENDER_MISMATCH", {
-          rejectStep: "GENDER",
-          rejectDetail: {
-            detectedValue: scan.genderAlignment.detectedValue,
-            detectedConfidence: scan.genderAlignment.detectedConfidence,
-            requiredValue: "Female",
-            requiredMinConfidence: 85,
-            genderMain: scan.genderContext.genderMain,
-            genderMoreOptions: scan.genderContext.moreOptions,
-            primaryFaceFromScan: scan.faceSummary,
-            facesDetected: photoUploadDebugLog.serializeFacesForLog(scan.faceDetails),
-            multipleFaces: scan.genderAlignment.multipleFaces === true,
-            hint:
-              scan.genderAlignment.detectedValue !== "Female"
-                ? "Rekognition primary-face gender is not Female"
-                : "Female detected but confidence below 85%",
-          },
-          multipleFaces: scan.genderAlignment.multipleFaces === true,
         })
       );
     }

@@ -133,26 +133,20 @@ async function scanJpegForModerationDetail(jpeg, sourceByteLength) {
  *   moderation: object,
  *   faceDetails: import("@aws-sdk/client-rekognition").FaceDetail[],
  *   facePresence: object,
- *   genderAlignment: object,
- *   genderContext: object,
  * }}
  */
-async function scanJpegForUploadValidation(jpeg, sourceByteLength, userId) {
+async function scanJpegForUploadValidation(jpeg, sourceByteLength) {
   const [moderation, faceDetails] = await Promise.all([
     scanJpegForModerationDetail(jpeg, sourceByteLength),
     photoFaceValidation.detectFacesOnJpeg(rekognition, jpeg),
   ]);
 
   const facePresence = photoFaceValidation.evaluateFacePresence(faceDetails);
-  const genderContext = await photoFaceValidation.loadUserGenderContext(userId);
-  const genderAlignment = photoFaceValidation.evaluateGenderAlignment(genderContext, facePresence);
 
   return {
     moderation,
     faceDetails,
     facePresence,
-    genderAlignment,
-    genderContext,
     faceSummary: photoFaceValidation.summarizeFaces(faceDetails),
   };
 }
@@ -167,11 +161,11 @@ async function scanS3ObjectForModerationDetail(s3Key) {
 }
 
 /**
- * Full upload validation: NSFW/moderation + human face + optional woman→female alignment.
+ * Full upload validation: NSFW/moderation + human face.
  */
-async function scanS3ObjectForUploadValidation(s3Key, userId) {
+async function scanS3ObjectForUploadValidation(s3Key) {
   const { raw, jpeg } = await transcodeS3KeyToJpeg(s3Key);
-  const validation = await scanJpegForUploadValidation(jpeg, raw.length, userId);
+  const validation = await scanJpegForUploadValidation(jpeg, raw.length);
   return {
     ...validation,
     sourceWebpBytes: raw.length,

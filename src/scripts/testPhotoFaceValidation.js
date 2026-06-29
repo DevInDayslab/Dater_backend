@@ -1,11 +1,9 @@
 /**
- * Offline checks for photo face / gender alignment helpers (no AWS).
+ * Offline checks for photo face presence helpers (no AWS).
  * Run: node src/scripts/testPhotoFaceValidation.js
  */
 const {
   evaluateFacePresence,
-  evaluateGenderAlignment,
-  profileRequiresFemaleFace,
   pickPrimaryFace,
 } = require("../services/photoFaceValidation.service");
 
@@ -39,24 +37,6 @@ function main() {
   assert(primary === group[1], "largest bbox wins");
   const groupEval = evaluateFacePresence(group);
   assert(groupEval.passed && groupEval.multipleFaces, "group with large primary passes");
-
-  const womanCtx = { genderMain: "Woman", gender: "", moreOptions: [] };
-  assert(profileRequiresFemaleFace(womanCtx), "Woman main requires check");
-  const manCtx = { genderMain: "Man", gender: "", moreOptions: [] };
-  assert(!profileRequiresFemaleFace(manCtx), "Man skips gender check");
-
-  const genderPass = evaluateGenderAlignment(womanCtx, ok);
-  assert(genderPass.passed, "Female >= 85 passes");
-
-  const genderReject = evaluateGenderAlignment(womanCtx, {
-    ...ok,
-    primaryGenderValue: "Male",
-    primaryGenderConfidence: 92,
-  });
-  assert(!genderReject.passed && genderReject.code === "GENDER_MISMATCH", "male gender mismatch");
-
-  const skip = evaluateGenderAlignment(manCtx, ok);
-  assert(skip.skipped && skip.passed, "non-woman skips");
 
   console.log("photoFaceValidation: all checks passed");
 }
