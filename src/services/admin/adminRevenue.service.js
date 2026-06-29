@@ -1,4 +1,5 @@
 const { query } = require("../../config/db");
+const { toUtcDateKey } = require("../../utils/dateKey");
 const { resolveWindow } = require("../../utils/adminWindow");
 
 function purchaseTimeFilter(win) {
@@ -27,7 +28,7 @@ async function getRevenueDaily(windowRaw = "30d") {
   );
 
   const mapRow = (row) => ({
-    date: String(row.day),
+    date: toUtcDateKey(row.day),
     subscriptions: Number(row.subscriptions || 0),
     boosts: Number(row.boosts || 0),
     comments: Number(row.comments || 0),
@@ -38,7 +39,7 @@ async function getRevenueDaily(windowRaw = "30d") {
     return res.rows.map(mapRow);
   }
 
-  const byDay = new Map(res.rows.map((row) => [String(row.day), mapRow(row)]));
+  const byDay = new Map(res.rows.map((row) => [toUtcDateKey(row.day), mapRow(row)]));
   const days = win.days || 30;
   const points = [];
   const end = new Date();
