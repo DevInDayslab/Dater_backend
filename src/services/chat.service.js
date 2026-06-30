@@ -1030,4 +1030,6 @@ module.exports = {
   deleteThreadFromInbox,
   getOrCreateDirectThread,
   acquireChatSendLock,
+  ensureParticipant,
+  getThreadPeer,
 };

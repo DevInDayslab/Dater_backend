@@ -8,7 +8,7 @@ const CACHE_TTL_MS = 60_000;
 async function loadActiveProducts() {
   const res = await query(
     `SELECT pack_code, category, quantity, duration_days, plan_code,
-            display_title, display_label, price_paise, currency,
+            display_title, display_label, price_paise, compare_at_price_paise, currency,
             badge_type, badge_text, is_default, is_active, sort_order,
             google_play_product_id, apple_product_id
      FROM product_configurations
@@ -21,7 +21,7 @@ async function loadActiveProducts() {
 async function loadAllProducts() {
   const res = await query(
     `SELECT pack_code, category, quantity, duration_days, plan_code,
-            display_title, display_label, price_paise, currency,
+            display_title, display_label, price_paise, compare_at_price_paise, currency,
             badge_type, badge_text, is_default, is_active, sort_order,
             google_play_product_id, apple_product_id, updated_at
      FROM product_configurations
@@ -43,6 +43,7 @@ async function getActiveCatalog({ bypassCache = false } = {}) {
     premium: products.filter((p) => p.category === "PREMIUM"),
     boost: products.filter((p) => p.category === "BOOST"),
     comments: products.filter((p) => p.category === "COMMENTS"),
+    chat: products.filter((p) => p.category === "CHAT"),
   };
   catalogCache = grouped;
   catalogCacheAt = now;
@@ -58,7 +59,7 @@ async function getProductByPackCode(packCode, { activeOnly = true } = {}) {
   const normalized = String(packCode || "").trim();
   if (!normalized) return null;
   const catalog = await getActiveCatalog();
-  const all = [...catalog.premium, ...catalog.boost, ...catalog.comments];
+  const all = [...catalog.premium, ...catalog.boost, ...catalog.comments, ...catalog.chat];
   const found = all.find((p) => p.packCode === normalized);
   if (found) return found;
   if (!activeOnly) {
@@ -84,7 +85,9 @@ async function getProductByPackSize(category, packSize) {
       ? catalog.boost
       : category === "COMMENTS"
         ? catalog.comments
-        : [];
+        : category === "CHAT"
+          ? catalog.chat
+          : [];
   return bucket.find((p) => p.quantity === size) || null;
 }
 
@@ -109,6 +112,7 @@ async function getPublicProductsPayload() {
       premiumUpgradeFrom: minPremiumUpgradeLabel(catalog.premium),
       boostFrom: minTeaserPrice(catalog.boost),
       commentsFrom: minTeaserPrice(catalog.comments),
+      chatUnlockFrom: minTeaserPrice(catalog.chat),
     },
   };
 }

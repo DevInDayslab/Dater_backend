@@ -6,11 +6,20 @@ function mapServiceError(error) {
     code === "INVALID_PREMIUM_PLAN" ||
     code === "INVALID_BOOST_PACK" ||
     code === "INVALID_COMMENTS_PACK" ||
-    code === "INVALID_BOOST_COUNT"
+    code === "INVALID_CHAT_UNLOCK_PACK" ||
+    code === "INVALID_BOOST_COUNT" ||
+    code === "INVALID_INPUT"
   ) {
     return { status: 400, code };
   }
-  if (code === "INSUFFICIENT_BOOST_CREDITS" || code === "INSUFFICIENT_COMMENT_CREDITS") {
+  if (code === "THREAD_NOT_FOUND" || code === "THREAD_PEER_NOT_FOUND") {
+    return { status: 404, code };
+  }
+  if (
+    code === "INSUFFICIENT_BOOST_CREDITS" ||
+    code === "INSUFFICIENT_COMMENT_CREDITS" ||
+    code === "CHAT_ALREADY_UNLOCKED"
+  ) {
     return { status: 409, code };
   }
   return { status: 500, code };
@@ -145,12 +154,36 @@ async function consumeComments(req, res) {
   }
 }
 
+async function purchaseChatUnlock(req, res) {
+  try {
+    const result = await entitlementsService.purchaseChatUnlock({
+      userId: req.auth.userId,
+      threadId: req.body?.threadId,
+      packCode: req.body?.packCode,
+      transactionId: req.body?.transactionId,
+    });
+    return res.status(200).json({
+      success: true,
+      message: "Chat unlocked",
+      data: result,
+    });
+  } catch (error) {
+    const mapped = mapServiceError(error);
+    return res.status(mapped.status).json({
+      success: false,
+      code: mapped.code,
+      message: error.message || "Failed to purchase chat unlock",
+    });
+  }
+}
+
 module.exports = {
   getMyEntitlements,
   purchasePremium,
   purchaseBoost,
   activateBoost,
   purchaseComments,
+  purchaseChatUnlock,
   consumeComments,
 };
 

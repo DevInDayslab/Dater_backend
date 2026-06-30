@@ -1,6 +1,7 @@
 const { pool } = require("../config/db");
 const { debugLog } = require("../utils/serverDebugLog");
 const productConfigService = require("./productConfig.service");
+const chatService = require("./chat.service");
 
 function toIsoOrNull(v) {
   return v ? new Date(v).toISOString() : null;
@@ -42,9 +43,10 @@ async function insertPurchase(client, {
   metadata,
 }) {
   const txId = String(transactionId || "").trim() || devTransactionId(userId, packCode);
-  await client.query(
+  const res = await client.query(
     `INSERT INTO user_purchases (user_id, item_type, amount, transaction_id, pack_code, quantity, metadata, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW())`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW())
+     RETURNING id`,
     [
       userId,
       itemType,
@@ -55,6 +57,7 @@ async function insertPurchase(client, {
       JSON.stringify(metadata || {}),
     ]
   );
+  return res.rows[0]?.id || null;
 }
 
 function computeBoostMinutes(activateCount) {
@@ -344,6 +347,103 @@ async function purchaseComments({ userId, packSize, packCode, transactionId }) {
   return getEntitlementsSnapshot(userId);
 }
 
+async function purchaseChatUnlock({ userId, threadId, packCode, transactionId }) {
+  const product = await resolvePackProduct("CHAT", { packCode });
+  if (!product) {
+    const err = new Error("Invalid chat unlock pack");
+    err.code = "INVALID_CHAT_UNLOCK_PACK";
+    throw err;
+  }
+
+  const normalizedThreadId = String(threadId || "").trim();
+  if (!normalizedThreadId) {
+    const err = new Error("threadId is required");
+    err.code = "INVALID_INPUT";
+    throw err;
+  }
+
+  const isParticipant = await chatService.ensureParticipant(normalizedThreadId, userId);
+  if (!isParticipant) {
+    const err = new Error("Thread not found");
+    err.code = "THREAD_NOT_FOUND";
+    throw err;
+  }
+
+  const peer = await chatService.getThreadPeer(normalizedThreadId, userId);
+  if (!peer) {
+    const err = new Error("Thread peer not found");
+    err.code = "THREAD_PEER_NOT_FOUND";
+    throw err;
+  }
+
+  const amountRupees = Number(product.pricePaise) / 100;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const restrictionRes = await client.query(
+      `SELECT is_unlocked, is_locally_unlocked
+       FROM chat_restrictions
+       WHERE user_id = $1 AND target_id = $2
+       FOR UPDATE`,
+      [userId, peer.id]
+    );
+    const restriction = restrictionRes.rows[0];
+    if (restriction?.is_unlocked === true || restriction?.is_locally_unlocked === true) {
+      const err = new Error("Chat is already unlocked");
+      err.code = "CHAT_ALREADY_UNLOCKED";
+      throw err;
+    }
+
+    const purchaseId = await insertPurchase(client, {
+      userId,
+      itemType: "UNLOCK_CHAT",
+      packCode: product.packCode,
+      amountRupees,
+      quantity: 1,
+      transactionId,
+      metadata: {
+        threadId: normalizedThreadId,
+        targetUserId: peer.id,
+        packCode: product.packCode,
+      },
+    });
+
+    await client.query(
+      `INSERT INTO chat_restrictions (user_id, target_id, is_unlocked, updated_at)
+       VALUES ($1, $2, TRUE, NOW())
+       ON CONFLICT (user_id, target_id)
+       DO UPDATE SET is_unlocked = TRUE, updated_at = NOW()`,
+      [userId, peer.id]
+    );
+
+    await client.query(
+      `INSERT INTO chat_unlock_events (user_id, target_id, purchase_id)
+       VALUES ($1, $2, $3)`,
+      [userId, peer.id, purchaseId]
+    );
+
+    await client.query("COMMIT");
+    debugLog("entitlement_chat_unlock_purchased", {
+      userId,
+      threadId: normalizedThreadId,
+      targetUserId: peer.id,
+      packCode: product.packCode,
+    });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+
+  return {
+    success: true,
+    threadId: normalizedThreadId,
+    packCode: product.packCode,
+  };
+}
+
 /**
  * Debit paid comments inside an existing transaction (caller owns BEGIN/COMMIT).
  * @param {import("pg").PoolClient} client
@@ -397,6 +497,7 @@ module.exports = {
   purchaseBoost,
   activateBoost,
   purchaseComments,
+  purchaseChatUnlock,
   consumePaidComments,
   consumePaidCommentsWithClient,
   syncPremiumState,

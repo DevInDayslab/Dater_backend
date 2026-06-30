@@ -39,17 +39,30 @@ function buildPackButtonLabel(quantity, label, pricePaise) {
   return `Get ${qty} ${unit.toLowerCase()} for ₹${price}`;
 }
 
+function buildChatUnlockButtonLabel(pricePaise) {
+  const price = compactInrPaise(pricePaise);
+  return `Unlock now for just ₹${price}`;
+}
+
 function mapProductRow(row) {
   const category = row.category;
   const pricePaise = Number(row.price_paise);
+  const compareAtPricePaise =
+    row.compare_at_price_paise == null ? null : Number(row.compare_at_price_paise);
   const priceLabel =
     category === "PREMIUM"
       ? formatInrPaise(pricePaise, { spaced: true })
       : formatInrPaise(pricePaise);
+  const compareAtPriceLabel =
+    compareAtPricePaise != null && Number.isFinite(compareAtPricePaise)
+      ? formatInrPaise(compareAtPricePaise)
+      : null;
   const buttonLabel =
     category === "PREMIUM"
       ? buildPremiumButtonLabel(row.display_title, row.display_label, pricePaise)
-      : buildPackButtonLabel(row.quantity, row.display_label, pricePaise);
+      : category === "CHAT"
+        ? buildChatUnlockButtonLabel(pricePaise)
+        : buildPackButtonLabel(row.quantity, row.display_label, pricePaise);
 
   return {
     packCode: row.pack_code,
@@ -60,8 +73,10 @@ function mapProductRow(row) {
     displayTitle: row.display_title,
     displayLabel: row.display_label,
     pricePaise,
+    compareAtPricePaise,
     currency: row.currency || "INR",
     priceLabel,
+    compareAtPriceLabel,
     buttonLabel,
     badgeType: row.badge_type || null,
     badgeText: row.badge_text || null,
@@ -81,5 +96,6 @@ module.exports = {
   durationDaysFromDisplay,
   buildPremiumButtonLabel,
   buildPackButtonLabel,
+  buildChatUnlockButtonLabel,
   mapProductRow,
 };

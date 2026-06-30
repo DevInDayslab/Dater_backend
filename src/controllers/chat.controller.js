@@ -97,6 +97,13 @@ async function getThreadLockStatus(req, res) {
 }
 
 async function unlockThreadLocally(req, res) {
+  if (process.env.NODE_ENV === "production") {
+    return res.status(403).json({
+      success: false,
+      code: "CHAT_UNLOCK_LOCAL_DISABLED",
+      message: "Use chat unlock purchase instead",
+    });
+  }
   try {
     const viewerId = req.auth.userId;
     const threadId = req.params.threadId;

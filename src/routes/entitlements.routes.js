@@ -10,6 +10,7 @@ router.post("/boost/purchase", requireAuth, entitlementsController.purchaseBoost
 router.post("/boost/activate", requireAuth, entitlementsController.activateBoost);
 router.post("/comments/purchase", requireAuth, entitlementsController.purchaseComments);
 router.post("/comments/consume", requireAuth, entitlementsController.consumeComments);
+router.post("/chat-unlock/purchase", requireAuth, entitlementsController.purchaseChatUnlock);
 
 module.exports = router;
 

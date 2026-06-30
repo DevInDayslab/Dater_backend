@@ -46,6 +46,28 @@ async function updateProducts(updates = []) {
       throw err;
     }
 
+    let compareAtPricePaise;
+    if (item.compareAtPricePaise !== undefined) {
+      compareAtPricePaise =
+        item.compareAtPricePaise === null ? null : Number(item.compareAtPricePaise);
+    } else if (item.compareAtPriceRupees !== undefined) {
+      compareAtPricePaise =
+        item.compareAtPriceRupees === null ? null : Math.round(Number(item.compareAtPriceRupees) * 100);
+    }
+    if (
+      compareAtPricePaise != null &&
+      (!Number.isFinite(compareAtPricePaise) || compareAtPricePaise <= 0)
+    ) {
+      const err = new Error(`Invalid compare-at price for ${packCode}`);
+      err.code = "INVALID_PRICE";
+      throw err;
+    }
+    if (pricePaise != null && compareAtPricePaise != null && compareAtPricePaise <= pricePaise) {
+      const err = new Error(`Compare-at price must be greater than price for ${packCode}`);
+      err.code = "INVALID_PRICE";
+      throw err;
+    }
+
     const quantity = item.quantity != null ? Number(item.quantity) : null;
     if (quantity != null && (!Number.isFinite(quantity) || quantity <= 0)) {
       const err = new Error(`Invalid quantity for ${packCode}`);
@@ -72,6 +94,10 @@ async function updateProducts(updates = []) {
     if (pricePaise != null) {
       fields.push(`price_paise = $${idx++}`);
       values.push(pricePaise);
+    }
+    if (item.compareAtPricePaise !== undefined || item.compareAtPriceRupees !== undefined) {
+      fields.push(`compare_at_price_paise = $${idx++}`);
+      values.push(compareAtPricePaise ?? null);
     }
     if (displayTitle != null && displayTitle !== "") {
       fields.push(`display_title = $${idx++}`);
