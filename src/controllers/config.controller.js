@@ -1,4 +1,5 @@
 const productConfigService = require("../services/productConfig.service");
+const platformConfigService = require("../services/platformConfig.service");
 
 async function getProducts(req, res) {
   try {
@@ -17,6 +18,24 @@ async function getProducts(req, res) {
   }
 }
 
+async function getApp(req, res) {
+  try {
+    const data = await platformConfigService.getPublicAppConfig();
+    return res.status(200).json({
+      success: true,
+      message: "App config fetched",
+      data,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch app config",
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   getProducts,
+  getApp,
 };

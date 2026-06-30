@@ -31,6 +31,10 @@ function buildStoryObjectKey(userId, storyId) {
   return `users/${userId}/stories/${storyId}.jpg`;
 }
 
+function buildPlatformSplashObjectKey() {
+  return "platform/splash-background.webp";
+}
+
 function newPhotoId() {
   return crypto.randomUUID();
 }
@@ -125,6 +129,7 @@ module.exports = {
   buildPublicObjectUrl,
   buildUserPhotoObjectKey,
   buildStoryObjectKey,
+  buildPlatformSplashObjectKey,
   newPhotoId,
   getPresignedPutUrl,
   getPresignedGetUrl,
