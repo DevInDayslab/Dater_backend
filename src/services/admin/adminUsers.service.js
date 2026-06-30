@@ -2,8 +2,10 @@ const { query, pool } = require("../../config/db");
 const { presignMediaUrl } = require("./adminPresign.service");
 const { withAdminReportDisplay } = require("../../utils/adminReportDisplay");
 const { loadUserFiltersDetail } = require("./filtersSnapshot.service");
+const { csvRow, formatAccountStateLabel } = require("../../utils/csvExport");
 
 const FREE_TIER_DAILY_PROFILE_VIEWS = 20;
+const USERS_EXPORT_MAX_ROWS = 10000;
 
 function parsePagination(queryParams) {
   const page = Math.max(Number.parseInt(queryParams.page, 10) || 1, 1);
@@ -59,8 +61,7 @@ async function getUserRow(userId, { includeDeleted = false } = {}) {
   return res.rows[0] || null;
 }
 
-async function listUsers(queryParams = {}) {
-  const { page, limit, offset } = parsePagination(queryParams);
+function buildUsersListFilters(queryParams = {}) {
   const search = String(queryParams.search || queryParams.q || "").trim();
   const states = parseStringArrayParam(queryParams.state);
   const genders = parseStringArrayParam(queryParams.gender);
@@ -117,7 +118,16 @@ async function listUsers(queryParams = {}) {
   if (sort === "last_active_at_desc") orderBy = "u.last_active_at DESC NULLS LAST";
   else if (sort === "name_asc") orderBy = "u.name ASC NULLS LAST";
 
-  const whereSql = where.join(" AND ");
+  return {
+    whereSql: where.join(" AND "),
+    params,
+    orderBy,
+  };
+}
+
+async function listUsers(queryParams = {}) {
+  const { page, limit, offset } = parsePagination(queryParams);
+  const { whereSql, params, orderBy } = buildUsersListFilters(queryParams);
 
   const countRes = await query(
     `SELECT COUNT(*)::int AS total
@@ -127,9 +137,9 @@ async function listUsers(queryParams = {}) {
   );
   const total = Number(countRes.rows[0]?.total || 0);
 
-  params.push(limit, offset);
-  const limitIdx = params.length - 1;
-  const offsetIdx = params.length;
+  const listParams = [...params, limit, offset];
+  const limitIdx = params.length + 1;
+  const offsetIdx = params.length + 2;
 
   const listRes = await query(
     `SELECT
@@ -165,7 +175,7 @@ async function listUsers(queryParams = {}) {
      WHERE ${whereSql}
      ORDER BY ${orderBy}
      LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
-    params
+    listParams
   );
 
   const users = await Promise.all(
@@ -199,6 +209,49 @@ async function listUsers(queryParams = {}) {
       total,
       totalPages: Math.max(1, Math.ceil(total / limit)),
     },
+  };
+}
+
+async function exportUsersCsv(queryParams = {}) {
+  const { whereSql, params, orderBy } = buildUsersListFilters(queryParams);
+  const limitIdx = params.length + 1;
+
+  const exportRes = await query(
+    `SELECT
+       u.phone_e164,
+       u.name,
+       u.account_state,
+       u.age_years,
+       u.gender_main
+     FROM users u
+     WHERE ${whereSql}
+     ORDER BY ${orderBy}
+     LIMIT $${limitIdx}`,
+    [...params, USERS_EXPORT_MAX_ROWS + 1]
+  );
+
+  const truncated = exportRes.rows.length > USERS_EXPORT_MAX_ROWS;
+  const rows = truncated ? exportRes.rows.slice(0, USERS_EXPORT_MAX_ROWS) : exportRes.rows;
+
+  let csv = csvRow(["Phone", "Name", "Account State", "Age", "Gender"]);
+  for (const row of rows) {
+    csv += csvRow([
+      row.phone_e164 || "",
+      row.name || "",
+      formatAccountStateLabel(row.account_state),
+      row.age_years != null ? String(row.age_years) : "",
+      row.gender_main || "",
+    ]);
+  }
+
+  if (truncated) {
+    csv += `# Export truncated at ${USERS_EXPORT_MAX_ROWS} rows\n`;
+  }
+
+  return {
+    csv,
+    rowCount: rows.length,
+    truncated,
   };
 }
 
@@ -856,6 +909,7 @@ async function getUserRevenue(userId) {
 
 module.exports = {
   listUsers,
+  exportUsersCsv,
   getUserProfile,
   getUserPhotos,
   getUserFilters,

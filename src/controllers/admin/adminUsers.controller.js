@@ -34,6 +34,25 @@ async function listUsers(req, res) {
   }
 }
 
+async function exportUsersCsv(req, res) {
+  try {
+    const result = await adminUsersService.exportUsersCsv(req.query);
+    const date = new Date().toISOString().slice(0, 10);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="dater-users-${date}.csv"`);
+    res.setHeader("X-Export-Row-Count", String(result.rowCount));
+    res.setHeader("X-Export-Truncated", result.truncated ? "true" : "false");
+    res.setHeader("Access-Control-Expose-Headers", "X-Export-Row-Count, X-Export-Truncated");
+    return res.status(200).send(result.csv);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to export users",
+      error: error.message,
+    });
+  }
+}
+
 async function getProfile(req, res) {
   try {
     const profile = await adminUsersService.getUserProfile(req.params.userId);
@@ -423,6 +442,7 @@ async function revokeSession(req, res) {
 
 module.exports = {
   listUsers,
+  exportUsersCsv,
   getProfile,
   getPhotos,
   getFilters,

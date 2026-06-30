@@ -4,6 +4,7 @@ const adminUsersController = require("../../controllers/admin/adminUsers.control
 const router = express.Router();
 
 router.get("/", adminUsersController.listUsers);
+router.get("/export", adminUsersController.exportUsersCsv);
 
 router.post("/:userId/report", adminUsersController.fileReport);
 router.post("/:userId/warning", adminUsersController.issueWarning);
