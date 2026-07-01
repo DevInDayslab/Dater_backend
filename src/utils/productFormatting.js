@@ -84,6 +84,7 @@ function mapProductRow(row) {
     isActive: Boolean(row.is_active),
     sortOrder: Number(row.sort_order),
     googlePlayProductId: row.google_play_product_id || null,
+    googlePlayBasePlanId: row.google_play_base_plan_id || null,
     appleProductId: row.apple_product_id || null,
     teaserFromLabel: `From ${formatInrPaise(pricePaise)}`,
     upgradeFromLabel: `Upgrade from ${formatInrPaise(pricePaise)}`,

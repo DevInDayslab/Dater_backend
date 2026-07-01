@@ -43,21 +43,32 @@ async function insertPurchase(client, {
   metadata,
 }) {
   const txId = String(transactionId || "").trim() || devTransactionId(userId, packCode);
-  const res = await client.query(
-    `INSERT INTO user_purchases (user_id, item_type, amount, transaction_id, pack_code, quantity, metadata, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW())
-     RETURNING id`,
-    [
-      userId,
-      itemType,
-      amountRupees,
-      txId,
-      packCode,
-      quantity,
-      JSON.stringify(metadata || {}),
-    ]
-  );
-  return res.rows[0]?.id || null;
+  try {
+    const res = await client.query(
+      `INSERT INTO user_purchases (user_id, item_type, amount, transaction_id, pack_code, quantity, metadata, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW())
+       RETURNING id`,
+      [
+        userId,
+        itemType,
+        amountRupees,
+        txId,
+        packCode,
+        quantity,
+        JSON.stringify(metadata || {}),
+      ]
+    );
+    return res.rows[0]?.id || null;
+  } catch (e) {
+    if (e.code === "23505") {
+      const existing = await client.query(
+        `SELECT id FROM user_purchases WHERE transaction_id = $1 LIMIT 1`,
+        [txId]
+      );
+      return existing.rows[0]?.id || null;
+    }
+    throw e;
+  }
 }
 
 function computeBoostMinutes(activateCount) {
@@ -161,7 +172,124 @@ async function getEntitlementsSnapshot(userId) {
   }
 }
 
-async function purchasePremium({ userId, planCode, packCode, transactionId }) {
+async function grantPremiumFromStore({
+  userId,
+  packCode,
+  planCode,
+  orderId,
+  expiresAt,
+  autoRenewing = true,
+  metadata = {},
+}) {
+  const product = await resolvePremiumProduct({ packCode, planCode });
+  if (!product) {
+    const err = new Error("Invalid premium plan");
+    err.code = "INVALID_PREMIUM_PLAN";
+    throw err;
+  }
+  const normalizedPlan = String(product.planCode || planCode || "").trim().toUpperCase();
+  const amountRupees = Number(product.pricePaise) / 100;
+  const expiryDate = new Date(expiresAt);
+  if (Number.isNaN(expiryDate.getTime())) {
+    const err = new Error("Invalid subscription expiry from Google");
+    err.code = "INVALID_SUBSCRIPTION";
+    throw err;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `UPDATE users
+       SET premium_started_at = COALESCE(premium_started_at, NOW()),
+           premium_expires_at = $2::timestamptz,
+           premium_plan_code = $3,
+           is_premium = TRUE,
+           premium_status = 'ACTIVE',
+           updated_at = NOW()
+       WHERE id = $1`,
+      [userId, expiryDate.toISOString(), normalizedPlan]
+    );
+    await insertPurchase(client, {
+      userId,
+      itemType: "SUBSCRIPTION",
+      packCode: product.packCode,
+      amountRupees,
+      quantity: 1,
+      transactionId: orderId,
+      metadata: {
+        planCode: normalizedPlan,
+        packCode: product.packCode,
+        autoRenewing,
+        source: "GOOGLE_PLAY",
+        ...(metadata || {}),
+      },
+    });
+    await client.query("COMMIT");
+    debugLog("entitlement_premium_granted_google", {
+      userId,
+      planCode: normalizedPlan,
+      packCode: product.packCode,
+      expiresAt: expiryDate.toISOString(),
+    });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+  return getEntitlementsSnapshot(userId);
+}
+
+async function extendPremiumFromStore({
+  userId,
+  orderId,
+  expiresAt,
+  autoRenewing,
+  metadata = {},
+  amountRupees = 0,
+  packCode = null,
+}) {
+  const expiryDate = new Date(expiresAt);
+  if (Number.isNaN(expiryDate.getTime())) {
+    const err = new Error("Invalid subscription expiry from Google");
+    err.code = "INVALID_SUBSCRIPTION";
+    throw err;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `UPDATE users
+       SET premium_expires_at = $2::timestamptz,
+           is_premium = CASE WHEN $2::timestamptz > NOW() THEN TRUE ELSE is_premium END,
+           premium_status = CASE WHEN $2::timestamptz > NOW() THEN 'ACTIVE' ELSE premium_status END,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [userId, expiryDate.toISOString()]
+    );
+    if (orderId) {
+      await insertPurchase(client, {
+        userId,
+        itemType: "SUBSCRIPTION",
+        packCode: packCode || "PREMIUM_RENEWAL",
+        amountRupees,
+        quantity: 1,
+        transactionId: orderId,
+        metadata: { source: "GOOGLE_PLAY_RENEWAL", autoRenewing, ...(metadata || {}) },
+      });
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+  return getEntitlementsSnapshot(userId);
+}
+
+async function purchasePremium({ userId, planCode, packCode, transactionId, metadata }) {
   const product = await resolvePremiumProduct({ packCode, planCode });
   if (!product) {
     const err = new Error("Invalid premium plan");
@@ -198,7 +326,7 @@ async function purchasePremium({ userId, planCode, packCode, transactionId }) {
       amountRupees,
       quantity: 1,
       transactionId,
-      metadata: { planCode: normalizedPlan, durationDays, packCode: product.packCode },
+      metadata: { planCode: normalizedPlan, durationDays, packCode: product.packCode, ...(metadata || {}) },
     });
     await client.query("COMMIT");
     debugLog("entitlement_premium_purchased", { userId, planCode: normalizedPlan, packCode: product.packCode });
@@ -211,7 +339,7 @@ async function purchasePremium({ userId, planCode, packCode, transactionId }) {
   return getEntitlementsSnapshot(userId);
 }
 
-async function purchaseBoost({ userId, packSize, packCode, transactionId }) {
+async function purchaseBoost({ userId, packSize, packCode, transactionId, metadata }) {
   const product = await resolvePackProduct("BOOST", { packCode, packSize });
   if (!product) {
     const err = new Error("Invalid boost pack");
@@ -237,7 +365,7 @@ async function purchaseBoost({ userId, packSize, packCode, transactionId }) {
       amountRupees,
       quantity: product.quantity,
       transactionId,
-      metadata: { packCode: product.packCode, quantity: product.quantity },
+      metadata: { packCode: product.packCode, quantity: product.quantity, ...(metadata || {}) },
     });
     await client.query("COMMIT");
     debugLog("entitlement_boost_purchased", { userId, packCode: product.packCode, quantity: product.quantity });
@@ -297,6 +425,11 @@ async function activateBoost({ userId, activateCount }) {
        WHERE user_id = $1`,
       [userId, count]
     );
+    await client.query(
+      `INSERT INTO premium_boosts (user_id, started_at, expires_at)
+       VALUES ($1, $3::timestamptz, $4::timestamptz)`,
+      [userId, startAt.toISOString(), expiresAt.toISOString()]
+    );
     await client.query("COMMIT");
     debugLog("entitlement_boost_activated", { userId, activatedCount: count, minutesToAdd });
   } catch (e) {
@@ -308,7 +441,7 @@ async function activateBoost({ userId, activateCount }) {
   return getEntitlementsSnapshot(userId);
 }
 
-async function purchaseComments({ userId, packSize, packCode, transactionId }) {
+async function purchaseComments({ userId, packSize, packCode, transactionId, metadata }) {
   const product = await resolvePackProduct("COMMENTS", { packCode, packSize });
   if (!product) {
     const err = new Error("Invalid comments pack");
@@ -334,7 +467,7 @@ async function purchaseComments({ userId, packSize, packCode, transactionId }) {
       amountRupees,
       quantity: product.quantity,
       transactionId,
-      metadata: { packCode: product.packCode, quantity: product.quantity },
+      metadata: { packCode: product.packCode, quantity: product.quantity, ...(metadata || {}) },
     });
     await client.query("COMMIT");
     debugLog("entitlement_comments_purchased", { userId, packCode: product.packCode, quantity: product.quantity });
@@ -347,7 +480,7 @@ async function purchaseComments({ userId, packSize, packCode, transactionId }) {
   return getEntitlementsSnapshot(userId);
 }
 
-async function purchaseChatUnlock({ userId, threadId, packCode, transactionId }) {
+async function purchaseChatUnlock({ userId, threadId, packCode, transactionId, metadata }) {
   const product = await resolvePackProduct("CHAT", { packCode });
   if (!product) {
     const err = new Error("Invalid chat unlock pack");
@@ -406,6 +539,7 @@ async function purchaseChatUnlock({ userId, threadId, packCode, transactionId })
         threadId: normalizedThreadId,
         targetUserId: peer.id,
         packCode: product.packCode,
+        ...(metadata || {}),
       },
     });
 
@@ -494,6 +628,10 @@ async function consumePaidComments({ userId, useCount = 1, reason = "COMMENT_REQ
 module.exports = {
   getEntitlementsSnapshot,
   purchasePremium,
+  grantPremiumFromStore,
+  grantPremiumFromGoogle: grantPremiumFromStore,
+  extendPremiumFromStore,
+  extendPremiumFromGoogle: extendPremiumFromStore,
   purchaseBoost,
   activateBoost,
   purchaseComments,

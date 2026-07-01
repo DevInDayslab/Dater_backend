@@ -157,6 +157,10 @@ async function updateProducts(updates = []) {
       fields.push(`google_play_product_id = $${idx++}`);
       values.push(item.googlePlayProductId || null);
     }
+    if (item.googlePlayBasePlanId !== undefined) {
+      fields.push(`google_play_base_plan_id = $${idx++}`);
+      values.push(item.googlePlayBasePlanId || null);
+    }
     if (item.appleProductId !== undefined) {
       fields.push(`apple_product_id = $${idx++}`);
       values.push(item.appleProductId || null);

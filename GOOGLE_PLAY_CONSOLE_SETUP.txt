@@ -1,0 +1,41 @@
+# Google Play Console setup (manual)
+
+Create these products in Play Console for `com.daterplat.app` before end-to-end testing:
+
+## Subscription — Dater Premium
+- Product ID: `dater_premium`
+- Base plans: `week`, `month`, `three-months` (mapped in migration 038)
+
+## Consumables (managed, consumable flag ON)
+- `boost_3`, `boost_6`, `boost_15`
+- `comments_2`, `comments_5`, `comments_15`
+- `chat_unlock_single`
+
+## Service account
+1. Link GCP project in Play Console → API access
+2. Create service account with Android Publisher API access
+3. Grant Play Console user permissions (view financial data, manage orders)
+4. Set `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` in backend `.env`
+
+## RTDN
+1. Create Pub/Sub topic `play-rtdn`
+2. Link in Play Console → Monetization → Real-time developer notifications
+3. Push subscription to `https://<api-host>/api/v1/billing/google-webhook`
+4. Set `GOOGLE_PLAY_RTDN_AUDIENCE` to that URL
+
+## License testers
+Add tester Google accounts in Play Console → License testing.
+
+## Internal testing
+Upload a signed release build and populate SKU IDs in DaterAdmin → Products (or run migrations 037–038).
+
+## iOS (future)
+The backend uses platform-agnostic tables (`store_purchase_verifications`, `store_subscriptions`, `store_webhook_events`) with `platform = GOOGLE_PLAY | APP_STORE`. iOS will call the same `POST /api/v1/billing/verify-purchase` with `platform: APP_STORE` and map `apple_product_id` from the admin catalog. App Store Server Notifications will use `store_webhook_events` with `platform = APP_STORE`.
+
+1. Initial premium purchase → verify endpoint grants premium until Google expiryTime
+2. Relaunch app → queryPurchasesAsync restores entitlement if verify was missed
+3. Duplicate verify with same orderId → idempotent, no double grant
+4. Accelerated renewal in Play tester → RTDN SUBSCRIPTION_RENEWED extends premium_expires_at
+5. Cancel subscription → premium remains until period end, then EXPIRED via RTDN
+6. Repurchase consumable boost pack twice → server consume between purchases
+7. Production: legacy POST /entitlements/*/purchase returns 403 without BILLING_DEV_MODE

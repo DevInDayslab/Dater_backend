@@ -1,5 +1,19 @@
 const entitlementsService = require("../services/entitlements.service");
 
+function isLegacyBillingAllowed() {
+  return process.env.BILLING_DEV_MODE === "true" || process.env.NODE_ENV !== "production";
+}
+
+function blockLegacyBillingUnlessDev(res) {
+  if (isLegacyBillingAllowed()) return false;
+  res.status(403).json({
+    success: false,
+    code: "BILLING_VERIFICATION_REQUIRED",
+    message: "Use Google Play billing verification endpoint",
+  });
+  return true;
+}
+
 function mapServiceError(error) {
   const code = error?.code || "ENTITLEMENT_ERROR";
   if (
@@ -43,6 +57,7 @@ async function getMyEntitlements(req, res) {
 }
 
 async function purchasePremium(req, res) {
+  if (blockLegacyBillingUnlessDev(res)) return;
   try {
     const snapshot = await entitlementsService.purchasePremium({
       userId: req.auth.userId,
@@ -66,6 +81,7 @@ async function purchasePremium(req, res) {
 }
 
 async function purchaseBoost(req, res) {
+  if (blockLegacyBillingUnlessDev(res)) return;
   try {
     const snapshot = await entitlementsService.purchaseBoost({
       userId: req.auth.userId,
@@ -110,6 +126,7 @@ async function activateBoost(req, res) {
 }
 
 async function purchaseComments(req, res) {
+  if (blockLegacyBillingUnlessDev(res)) return;
   try {
     const snapshot = await entitlementsService.purchaseComments({
       userId: req.auth.userId,
@@ -155,6 +172,7 @@ async function consumeComments(req, res) {
 }
 
 async function purchaseChatUnlock(req, res) {
+  if (blockLegacyBillingUnlessDev(res)) return;
   try {
     const result = await entitlementsService.purchaseChatUnlock({
       userId: req.auth.userId,

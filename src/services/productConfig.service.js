@@ -10,7 +10,7 @@ async function loadActiveProducts() {
     `SELECT pack_code, category, quantity, duration_days, plan_code,
             display_title, display_label, price_paise, compare_at_price_paise, currency,
             badge_type, badge_text, is_default, is_active, sort_order,
-            google_play_product_id, apple_product_id
+            google_play_product_id, google_play_base_plan_id, apple_product_id
      FROM product_configurations
      WHERE is_active = TRUE
      ORDER BY category ASC, sort_order ASC`
@@ -23,7 +23,7 @@ async function loadAllProducts() {
     `SELECT pack_code, category, quantity, duration_days, plan_code,
             display_title, display_label, price_paise, compare_at_price_paise, currency,
             badge_type, badge_text, is_default, is_active, sort_order,
-            google_play_product_id, apple_product_id, updated_at
+            google_play_product_id, google_play_base_plan_id, apple_product_id, updated_at
      FROM product_configurations
      ORDER BY category ASC, sort_order ASC`
   );
@@ -117,12 +117,29 @@ async function getPublicProductsPayload() {
   };
 }
 
+async function getProductByGooglePlayProductId(googlePlayProductId, { basePlanId } = {}) {
+  const normalized = String(googlePlayProductId || "").trim();
+  if (!normalized) return null;
+  const catalog = await getActiveCatalog();
+  const all = [...catalog.premium, ...catalog.boost, ...catalog.comments, ...catalog.chat];
+  const matches = all.filter((p) => p.googlePlayProductId === normalized);
+  if (!matches.length) return null;
+  if (basePlanId) {
+    const planMatch = matches.find(
+      (p) => String(p.googlePlayBasePlanId || "").toLowerCase() === String(basePlanId).toLowerCase()
+    );
+    if (planMatch) return planMatch;
+  }
+  return matches[0];
+}
+
 module.exports = {
   getActiveCatalog,
   getPublicProductsPayload,
   getProductByPackCode,
   getProductByPlanCode,
   getProductByPackSize,
+  getProductByGooglePlayProductId,
   loadAllProducts,
   clearCatalogCache,
 };
