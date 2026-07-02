@@ -443,7 +443,7 @@ async function activateBoost({ userId, activateCount }) {
     );
     await client.query(
       `INSERT INTO premium_boosts (user_id, started_at, expires_at)
-       VALUES ($1, $3::timestamptz, $4::timestamptz)`,
+       VALUES ($1, $2::timestamptz, $3::timestamptz)`,
       [userId, startAt.toISOString(), expiresAt.toISOString()]
     );
     await client.query("COMMIT");
