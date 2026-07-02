@@ -42,12 +42,12 @@ INSERT INTO product_configurations (
     ('PREMIUM_WEEK', 'PREMIUM', 1, 7, 'WEEK', '1', 'Week', 49900, NULL, NULL, TRUE, TRUE, 1),
     ('PREMIUM_MONTH', 'PREMIUM', 1, 30, 'MONTH', '1', 'Month', 99900, 'MOST_POPULAR', NULL, FALSE, TRUE, 2),
     ('PREMIUM_THREE_MONTHS', 'PREMIUM', 1, 90, 'THREE_MONTHS', '3', 'Months', 219900, 'SAVE', 'Save 25%', FALSE, TRUE, 3),
-    ('BOOST_3', 'BOOST', 3, NULL, NULL, '3', 'Boosts', 19900, NULL, NULL, FALSE, TRUE, 1),
-    ('BOOST_6', 'BOOST', 6, NULL, NULL, '6', 'Boosts', 54900, 'MOST_POPULAR', NULL, TRUE, TRUE, 2),
-    ('BOOST_15', 'BOOST', 15, NULL, NULL, '15', 'Boosts', 119900, 'SAVE', 'Save 25%', FALSE, TRUE, 3),
-    ('COMMENTS_2', 'COMMENTS', 2, NULL, NULL, '2', 'Comments', 19900, NULL, NULL, FALSE, TRUE, 1),
-    ('COMMENTS_5', 'COMMENTS', 5, NULL, NULL, '5', 'Comments', 44900, 'MOST_POPULAR', NULL, TRUE, TRUE, 2),
-    ('COMMENTS_15', 'COMMENTS', 15, NULL, NULL, '15', 'Comments', 119900, 'SAVE', 'Save 25%', FALSE, TRUE, 3)
+    ('BOOST_1', 'BOOST', 3, NULL, NULL, '3', 'Boosts', 19900, NULL, NULL, FALSE, TRUE, 1),
+    ('BOOST_2', 'BOOST', 6, NULL, NULL, '6', 'Boosts', 54900, 'MOST_POPULAR', NULL, TRUE, TRUE, 2),
+    ('BOOST_3', 'BOOST', 15, NULL, NULL, '15', 'Boosts', 119900, 'SAVE', 'Save 25%', FALSE, TRUE, 3),
+    ('COMMENTS_1', 'COMMENTS', 2, NULL, NULL, '2', 'Comments', 19900, NULL, NULL, FALSE, TRUE, 1),
+    ('COMMENTS_2', 'COMMENTS', 5, NULL, NULL, '5', 'Comments', 44900, 'MOST_POPULAR', NULL, TRUE, TRUE, 2),
+    ('COMMENTS_3', 'COMMENTS', 15, NULL, NULL, '15', 'Comments', 119900, 'SAVE', 'Save 25%', FALSE, TRUE, 3)
 ON CONFLICT (pack_code) DO NOTHING;
 
 COMMENT ON TABLE product_configurations IS 'Admin-editable monetization catalog consumed by mobile paywalls.';
