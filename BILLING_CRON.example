@@ -1,0 +1,15 @@
+# Billing cron jobs (production)
+
+Schedule these on your API host (Railway, Render cron, GCP Cloud Scheduler, etc.):
+
+```cron
+# Every 15 minutes — acknowledge subscriptions within Google's 3-day window
+*/15 * * * * cd /app/backend && npm run billing:retry-fulfillment
+
+# Daily at 03:00 UTC — reconcile Google subscription state drift
+0 3 * * * cd /app/backend && npm run billing:reconcile-subscriptions
+```
+
+Required env: `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`, `GOOGLE_PLAY_PACKAGE_NAME`, `GOOGLE_PLAY_RTDN_AUDIENCE`, `BILLING_DEV_MODE=false`.
+
+See `GOOGLE_PLAY_CONSOLE_SETUP.txt` for Play Console + Pub/Sub wiring.

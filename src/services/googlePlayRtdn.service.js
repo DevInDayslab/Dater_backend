@@ -2,6 +2,7 @@ const { pool } = require("../config/db");
 const { STORE_PLATFORM } = require("../constants/storePlatforms");
 const googlePlayBilling = require("./googlePlayBilling.service");
 const billingVerificationService = require("./billingVerification.service");
+const subscriptionStateService = require("./subscriptionState.service");
 const entitlementsService = require("./entitlements.service");
 const { debugLog } = require("../utils/serverDebugLog");
 
@@ -13,6 +14,8 @@ const SUBSCRIPTION_PURCHASED = 4;
 const SUBSCRIPTION_ON_HOLD = 5;
 const SUBSCRIPTION_IN_GRACE_PERIOD = 6;
 const SUBSCRIPTION_RESTARTED = 1;
+const SUBSCRIPTION_PAUSED = 10;
+const SUBSCRIPTION_PAUSE_SCHEDULE_CHANGED = 11;
 const SUBSCRIPTION_EXPIRED = 13;
 const SUBSCRIPTION_REVOKED = 12;
 
@@ -64,42 +67,52 @@ async function handleSubscriptionNotification(notification) {
   const lineItem = billingVerificationService.pickSubscriptionLineItem(subscription, {
     productId: notification?.subscriptionId,
   });
-  const expiryTime = lineItem?.expiryTime;
   const storeOrderId = subscription?.latestOrderId || lineItem?.latestSuccessfulOrderId;
-  const autoRenewing = Boolean(lineItem?.autoRenewingPlan?.autoRenewEnabled);
-  const subscriptionState = String(subscription?.subscriptionState || "");
+
+  if (notificationType === SUBSCRIPTION_CANCELED) {
+    await subscriptionStateService.applyCanceledSubscription({
+      userId,
+      subscription,
+      purchaseToken,
+      notificationType,
+    });
+    return;
+  }
 
   if (
     notificationType === SUBSCRIPTION_RENEWED ||
     notificationType === SUBSCRIPTION_PURCHASED ||
     notificationType === SUBSCRIPTION_RESTARTED
   ) {
-    if (expiryTime) {
-      await entitlementsService.extendPremiumFromStore({
-        userId,
-        orderId: storeOrderId,
-        expiresAt: expiryTime,
-        autoRenewing,
-        metadata: billingVerificationService.storeMetadata(PLATFORM, {
-          purchaseToken,
-          productId: lineItem?.productId || notification?.subscriptionId,
-          orderId: storeOrderId,
-          basePlanId: lineItem?.offerDetails?.basePlanId,
-        }),
-      });
+    await subscriptionStateService.applySubscriptionStateFromGoogle({
+      userId,
+      subscription,
+      purchaseToken,
+      productId: lineItem?.productId || notification?.subscriptionId,
+      source: "rtdn",
+      notificationType,
+    });
+    if (storeOrderId && notificationType === SUBSCRIPTION_RENEWED) {
       const client = await pool.connect();
       try {
-        await billingVerificationService.upsertStoreSubscription(client, {
-          platform: PLATFORM,
+        await client.query("BEGIN");
+        await entitlementsService.insertPurchase(client, {
           userId,
-          storeProductId: lineItem?.productId || notification?.subscriptionId,
-          purchaseToken,
-          storeOrderId,
-          expiryTime,
-          autoRenewing,
-          storeState: subscriptionState,
-          metadata: { notificationType },
+          itemType: "SUBSCRIPTION",
+          packCode: "PREMIUM_RENEWAL",
+          amountRupees: 0,
+          quantity: 1,
+          transactionId: storeOrderId,
+          metadata: {
+            source: "GOOGLE_PLAY_RENEWAL",
+            notificationType,
+            platform: PLATFORM,
+          },
         });
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        debugLog("billing_rtdn_renewal_ledger_failed", { userId, message: error.message });
       } finally {
         client.release();
       }
@@ -107,83 +120,33 @@ async function handleSubscriptionNotification(notification) {
     return;
   }
 
-  if (notificationType === SUBSCRIPTION_CANCELED) {
-    await pool.query(
-      `UPDATE store_subscriptions
-       SET auto_renewing = FALSE,
-           store_state = $3,
-           metadata = metadata || $4::jsonb,
-           updated_at = NOW()
-       WHERE user_id = $1 AND platform = $2`,
-      [
-        userId,
-        PLATFORM,
-        subscriptionState,
-        JSON.stringify({ canceledAt: new Date().toISOString() }),
-      ]
-    );
-    return;
-  }
-
   if (
+    notificationType === SUBSCRIPTION_ON_HOLD ||
     notificationType === SUBSCRIPTION_IN_GRACE_PERIOD ||
-    notificationType === SUBSCRIPTION_ON_HOLD
+    notificationType === SUBSCRIPTION_PAUSED ||
+    notificationType === SUBSCRIPTION_PAUSE_SCHEDULE_CHANGED ||
+    notificationType === SUBSCRIPTION_EXPIRED ||
+    notificationType === SUBSCRIPTION_REVOKED
   ) {
-    if (expiryTime) {
-      await entitlementsService.extendPremiumFromStore({
-        userId,
-        orderId: null,
-        expiresAt: expiryTime,
-        autoRenewing,
-        metadata: { graceOrHold: true, notificationType },
-      });
-    }
-    await pool.query(
-      `UPDATE store_subscriptions
-       SET store_state = $3,
-           metadata = metadata || $4::jsonb,
-           updated_at = NOW()
-       WHERE user_id = $1 AND platform = $2`,
-      [userId, PLATFORM, subscriptionState, JSON.stringify({ notificationType })]
-    );
+    await subscriptionStateService.applySubscriptionStateFromGoogle({
+      userId,
+      subscription,
+      purchaseToken,
+      productId: lineItem?.productId || notification?.subscriptionId,
+      source: "rtdn",
+      notificationType,
+    });
     return;
   }
 
-  if (notificationType === SUBSCRIPTION_EXPIRED) {
-    await pool.query(
-      `UPDATE users
-       SET is_premium = FALSE,
-           premium_status = 'EXPIRED',
-           updated_at = NOW()
-       WHERE id = $1`,
-      [userId]
-    );
-    await pool.query(
-      `UPDATE store_subscriptions
-       SET store_state = $3, auto_renewing = FALSE, updated_at = NOW()
-       WHERE user_id = $1 AND platform = $2`,
-      [userId, PLATFORM, subscriptionState]
-    );
-    return;
-  }
-
-  if (notificationType === SUBSCRIPTION_REVOKED) {
-    await pool.query(
-      `UPDATE users
-       SET is_premium = FALSE,
-           premium_status = 'INACTIVE',
-           premium_expires_at = NOW(),
-           updated_at = NOW()
-       WHERE id = $1`,
-      [userId]
-    );
-    await pool.query(
-      `UPDATE store_subscriptions
-       SET store_state = $3, auto_renewing = FALSE, updated_at = NOW()
-       WHERE user_id = $1 AND platform = $2`,
-      [userId, PLATFORM, subscriptionState]
-    );
-  }
+  await subscriptionStateService.applySubscriptionStateFromGoogle({
+    userId,
+    subscription,
+    purchaseToken,
+    productId: lineItem?.productId || notification?.subscriptionId,
+    source: "rtdn",
+    notificationType,
+  });
 }
 
 async function handleVoidedPurchase(notification) {

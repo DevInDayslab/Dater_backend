@@ -4,12 +4,8 @@ const { isPlayBillingConfigured } = require("../config/googlePlay");
 const googlePlayBilling = require("./googlePlayBilling.service");
 const productConfigService = require("./productConfig.service");
 const entitlementsService = require("./entitlements.service");
+const subscriptionStateService = require("./subscriptionState.service");
 const { debugLog } = require("../utils/serverDebugLog");
-
-const ACTIVE_SUBSCRIPTION_STATES = new Set([
-  "SUBSCRIPTION_STATE_ACTIVE",
-  "SUBSCRIPTION_STATE_IN_GRACE_PERIOD",
-]);
 
 const PENDING_SUBSCRIPTION_STATES = new Set(["SUBSCRIPTION_STATE_PENDING"]);
 
@@ -170,11 +166,6 @@ async function verifyGooglePlaySubscription({
     err.code = "PURCHASE_PENDING";
     throw err;
   }
-  if (!ACTIVE_SUBSCRIPTION_STATES.has(subscriptionState)) {
-    const err = new Error("Subscription is not active");
-    err.code = "SUBSCRIPTION_INACTIVE";
-    throw err;
-  }
 
   const lineItem = pickSubscriptionLineItem(subscription, {
     productId,
@@ -184,6 +175,11 @@ async function verifyGooglePlaySubscription({
   if (!expiryTime) {
     const err = new Error("Subscription expiry missing from Google");
     err.code = "INVALID_SUBSCRIPTION";
+    throw err;
+  }
+  if (!subscriptionStateService.subscriptionStateGrantsAccess(subscriptionState, expiryTime)) {
+    const err = new Error("Subscription is not active");
+    err.code = "SUBSCRIPTION_INACTIVE";
     throw err;
   }
 
@@ -205,23 +201,46 @@ async function verifyGooglePlaySubscription({
     basePlanId: lineItem?.offerDetails?.basePlanId || basePlanId || product.googlePlayBasePlanId,
   });
 
-  const snapshot = await entitlementsService.grantPremiumFromStore({
+  await subscriptionStateService.applySubscriptionStateFromGoogle({
     userId,
+    subscription,
+    purchaseToken,
+    productId,
     packCode: product.packCode,
     planCode: product.planCode,
-    orderId: storeOrderId,
-    expiresAt: expiryTime,
-    autoRenewing,
-    metadata,
+    basePlanId: basePlanId || product.googlePlayBasePlanId,
+    source: "verify",
   });
 
+  const normalizedPlan = String(product.planCode || "").trim().toUpperCase();
+  const amountRupees = Number(product.pricePaise) / 100;
+
   const client = await pool.connect();
+  let userPurchaseId = null;
   try {
     await client.query("BEGIN");
-    const purchaseRow = await client.query(
-      `SELECT id FROM user_purchases WHERE transaction_id = $1 LIMIT 1`,
-      [storeOrderId]
+    await client.query(
+      `UPDATE users
+       SET premium_plan_code = $2,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [userId, normalizedPlan]
     );
+    userPurchaseId = await entitlementsService.insertPurchase(client, {
+      userId,
+      itemType: "SUBSCRIPTION",
+      packCode: product.packCode,
+      amountRupees,
+      quantity: 1,
+      transactionId: storeOrderId,
+      metadata: {
+        planCode: normalizedPlan,
+        packCode: product.packCode,
+        autoRenewing,
+        source: "GOOGLE_PLAY",
+        ...(metadata || {}),
+      },
+    });
     await recordStorePurchaseVerification(client, {
       platform,
       userId,
@@ -231,18 +250,7 @@ async function verifyGooglePlaySubscription({
       packCode: product.packCode,
       purchaseType: "SUBSCRIPTION",
       storeState: subscriptionState,
-      userPurchaseId: purchaseRow.rows[0]?.id || null,
-      metadata,
-    });
-    await upsertStoreSubscription(client, {
-      platform,
-      userId,
-      storeProductId: productId,
-      purchaseToken,
-      storeOrderId,
-      expiryTime,
-      autoRenewing,
-      storeState: subscriptionState,
+      userPurchaseId,
       metadata,
     });
     await client.query("COMMIT");
@@ -265,7 +273,7 @@ async function verifyGooglePlaySubscription({
     debugLog("billing_ack_failed", { userId, storeOrderId, message: ackErr.message });
   }
 
-  return snapshot;
+  return entitlementsService.getEntitlementsSnapshot(userId);
 }
 
 async function verifyGooglePlayInApp({

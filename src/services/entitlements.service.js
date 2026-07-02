@@ -2,6 +2,7 @@ const { pool } = require("../config/db");
 const { debugLog } = require("../utils/serverDebugLog");
 const productConfigService = require("./productConfig.service");
 const chatService = require("./chat.service");
+const { hasPremiumAccess } = require("./subscriptionState.service");
 
 function toIsoOrNull(v) {
   return v ? new Date(v).toISOString() : null;
@@ -80,8 +81,18 @@ function computeBoostMinutes(activateCount) {
 async function syncPremiumState(client, userId) {
   const res = await client.query(
     `UPDATE users
-     SET is_premium = CASE WHEN premium_expires_at IS NOT NULL AND premium_expires_at > NOW() THEN TRUE ELSE FALSE END,
+     SET is_premium = CASE
+           WHEN premium_status IN ('ON_HOLD', 'PAUSED', 'EXPIRED', 'INACTIVE') THEN FALSE
+           WHEN premium_status = 'GRACE_PERIOD' THEN
+             CASE WHEN premium_expires_at IS NOT NULL AND premium_expires_at > NOW() THEN TRUE ELSE FALSE END
+           WHEN premium_status IN ('ACTIVE', 'CANCELLED') THEN
+             CASE WHEN premium_expires_at IS NOT NULL AND premium_expires_at > NOW() THEN TRUE ELSE FALSE END
+           WHEN premium_expires_at IS NOT NULL AND premium_expires_at > NOW() THEN TRUE
+           ELSE FALSE
+         END,
          premium_status = CASE
+           WHEN premium_status IN ('ON_HOLD', 'PAUSED', 'GRACE_PERIOD') THEN premium_status
+           WHEN premium_status = 'CANCELLED' AND premium_expires_at IS NOT NULL AND premium_expires_at > NOW() THEN 'CANCELLED'
            WHEN premium_expires_at IS NOT NULL AND premium_expires_at > NOW() THEN 'ACTIVE'
            WHEN premium_expires_at IS NOT NULL THEN 'EXPIRED'
            ELSE 'INACTIVE'
@@ -158,7 +169,7 @@ async function getEntitlementsSnapshot(userId) {
     const comments = await getCommentsSnapshot(client, userId);
     return {
       premium: {
-        isActive: Boolean(premium?.is_premium),
+        isActive: hasPremiumAccess(premium),
         startedAt: toIsoOrNull(premium?.premium_started_at),
         expiresAt: toIsoOrNull(premium?.premium_expires_at),
         planCode: premium?.premium_plan_code || null,
@@ -639,5 +650,7 @@ module.exports = {
   consumePaidComments,
   consumePaidCommentsWithClient,
   syncPremiumState,
+  insertPurchase,
+  hasPremiumAccess,
 };
 
