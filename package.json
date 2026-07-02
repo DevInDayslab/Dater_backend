@@ -35,6 +35,7 @@
     "start": "node src/index.js",
     "billing:reconcile-subscriptions": "node src/scripts/reconcilePlaySubscriptions.js",
     "billing:retry-fulfillment": "node src/scripts/retryBillingFulfillment.js",
+    "verify:consumables-play-config": "node src/scripts/verifyConsumablesPlayConfig.js",
     "verify:products-catalog": "node src/scripts/verifyProductsCatalog.js",
     "verify:play-config": "node src/scripts/verifyPlayBillingConfig.js",
     "verify:billing-modules": "node src/scripts/verifyBillingModuleGraph.js",

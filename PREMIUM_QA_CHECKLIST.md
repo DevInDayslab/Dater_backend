@@ -174,9 +174,26 @@ Optional DB integration (rolls back): set `VERIFY_PREMIUM_EXPIRY_USER_ID=<uuid>`
 
 ---
 
+## I. Consumables (Boost, Comments, Chat unlock)
+
+| Step | Action | Expected |
+|------|--------|----------|
+| I1 | Open Boost paywall (license tester) | 3 tiers show Play prices (not hardcoded ₹) |
+| I2 | Purchase `BOOST_2` | Wallet credits += admin quantity; Play charged; consume OK |
+| I3 | Change quantity in DaterAdmin (e.g. 6→10) | Paywall still shows Play price; grant uses new qty |
+| I4 | Comments — same as I1–I3 | |
+| I5 | Chat unlock from locked thread | Play price shown; thread unlocks after purchase |
+| I6 | Cold start offline → online | Cached Play prices appear without flicker to backend ₹ |
+
+Automated server check: `npm run verify:consumables-play-config`
+
+Deploy order for consumables: run migration 042 → `verify:consumables-play-config` → `pm2 restart dater-api` → upload Android AAB → run I1–I6 on license tester.
+
+---
+
 ## Deploy order (every billing fix)
 
-1. Push backend → EC2 pull → `npm run verify:play-config` → `npm run verify:billing-modules` → `npm run verify:premium-expiry-revert` → `pm2 restart dater-api`
+1. Push backend → EC2 pull → `npm run verify:play-config` → `npm run verify:consumables-play-config` → `npm run verify:billing-modules` → `npm run verify:premium-expiry-revert` → `pm2 restart dater-api`
 2. Confirm A4 logs clean
 3. Build & upload AAB to Internal testing (if Android changed)
 4. Run checklist sections C → D → E on license tester device

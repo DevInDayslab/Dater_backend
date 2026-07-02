@@ -13,9 +13,22 @@ Create these products in Play Console for `com.daterplat.app` before end-to-end 
 | `PREMIUM_THREE_MONTHS` | `dater_premium` | `three-month` |
 
 ## Consumables (managed, consumable flag ON)
-- `boost_3`, `boost_6`, `boost_15`
-- `comments_2`, `comments_5`, `comments_15`
-- `chat_unlock_single`
+
+| Admin `pack_code` | Play product ID |
+|-------------------|-----------------|
+| `BOOST_1` | `boost_one` |
+| `BOOST_2` | `boost_plan2` |
+| `BOOST_3` | `boost_plan3` |
+| `COMMENTS_1` | `comment_one` |
+| `COMMENTS_2` | `comment_2` |
+| `COMMENTS_3` | `comment_3` |
+| `CHAT_UNLOCK_SINGLE` | `chat_unlock` |
+
+After migration 042, verify:
+
+```bash
+npm run verify:consumables-play-config
+```
 
 ## Service account
 1. Link GCP project in Play Console → API access
