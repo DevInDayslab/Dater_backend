@@ -6,6 +6,8 @@ const { resolveUserAppRoute } = require("../utils/resolveUserAppRoute");
 const profileMeExtension = require("../services/profileMeExtension.service");
 const s3Media = require("../services/s3Media.service");
 const entitlementsService = require("../services/entitlements.service");
+const { hasPremiumAccess } = require("../services/subscriptionState.service");
+const { clearAdvancedFilterPreferencesFromDb } = require("../services/premiumExclusiveSettings.service");
 const verificationService = require("../services/verification.service");
 const socialService = require("../services/social.service");
 const accountLifecycle = require("../services/accountLifecycle.service");
@@ -125,53 +127,6 @@ function noopBooleanPatch() {
 
 function noopIntegerPatch() {
   return { present: false, value: null };
-}
-
-/** Matches feed / entitlements: flag or an in-window premium interval. */
-function isActivePremiumUser(row) {
-  if (!row) return false;
-  if (row.is_premium === true) return true;
-  const premiumStartMs = row.premium_started_at ? new Date(row.premium_started_at).getTime() : null;
-  const premiumExpiryMs = row.premium_expires_at ? new Date(row.premium_expires_at).getTime() : null;
-  const nowMs = Date.now();
-  return (
-    Number.isFinite(premiumStartMs) &&
-    Number.isFinite(premiumExpiryMs) &&
-    premiumStartMs <= nowMs &&
-    nowMs < premiumExpiryMs
-  );
-}
-
-const ADVANCED_FILTER_JUNCTION_TABLES = [
-  "user_filter_marital_statuses",
-  "user_filter_looking_for",
-  "user_filter_drinking_preferences",
-  "user_filter_smoking_preferences",
-  "user_filter_exercise_preferences",
-  "user_filter_religion_preferences",
-  "user_filter_education_preferences",
-  "user_filter_star_sign_preferences",
-  "user_filter_kids_preferences",
-  "user_filter_political_preferences",
-  "user_filter_pet_preferences",
-  "user_filter_ethnicity_preferences",
-  "user_filter_pronoun_preferences",
-];
-
-/** Premium-only filter rows + height / show-other scalars — safe to call repeatedly. */
-async function clearAdvancedFilterPreferencesFromDb(client, userId) {
-  for (const table of ADVANCED_FILTER_JUNCTION_TABLES) {
-    await client.query(`DELETE FROM ${table} WHERE user_id = $1`, [userId]);
-  }
-  await client.query(
-    `UPDATE user_filters
-     SET min_height_inches = NULL,
-         max_height_inches = NULL,
-         show_other_people_if_run_out = TRUE,
-         updated_at = NOW()
-     WHERE user_id = $1`,
-    [userId]
-  );
 }
 
 async function ensureUserFiltersRow(client, userId) {
@@ -524,7 +479,7 @@ async function getMyFilters(req, res) {
   try {
     const userId = req.auth.userId;
     const userRowRes = await query(
-      `SELECT id, is_premium, premium_started_at, premium_expires_at
+      `SELECT id, is_premium, premium_started_at, premium_expires_at, premium_status
        FROM users
        WHERE id = $1 AND deleted_at IS NULL
        LIMIT 1`,
@@ -536,7 +491,7 @@ async function getMyFilters(req, res) {
         message: "User not found",
       });
     }
-    if (!isActivePremiumUser(userRowRes.rows[0])) {
+    if (!hasPremiumAccess(userRowRes.rows[0])) {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
@@ -650,7 +605,7 @@ async function updateMyFilters(req, res) {
   }
 
   const currentUserRes = await query(
-    `SELECT is_verified, is_premium, premium_started_at, premium_expires_at
+    `SELECT is_verified, is_premium, premium_started_at, premium_expires_at, premium_status
      FROM users
      WHERE id = $1
      LIMIT 1`,
@@ -669,7 +624,7 @@ async function updateMyFilters(req, res) {
     });
   }
 
-  const isPremiumUser = isActivePremiumUser(currentUser);
+  const isPremiumUser = hasPremiumAccess(currentUser);
 
   const selectedLocationRaw = hasOwn(body, "selectedLocation")
     ? String(body.selectedLocation || "").trim()
@@ -1712,7 +1667,7 @@ async function patchAccountSettings(req, res) {
     }
 
     const rowRes = await query(
-      `SELECT id, account_state, is_premium, premium_started_at, premium_expires_at, paused_until
+      `SELECT id, account_state, is_premium, premium_started_at, premium_expires_at, premium_status, paused_until
        FROM users
        WHERE id = $1::uuid AND deleted_at IS NULL
        LIMIT 1`,
@@ -1775,7 +1730,7 @@ async function patchAccountSettings(req, res) {
         return res.status(400).json({ success: false, message: "privacyMode must be a boolean" });
       }
       if (body.privacyMode === true) {
-        if (!isActivePremiumUser(row)) {
+        if (!hasPremiumAccess(row)) {
           return res.status(402).json({
             success: false,
             code: "PREMIUM_REQUIRED",

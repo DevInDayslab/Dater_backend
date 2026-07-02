@@ -39,6 +39,7 @@
     "verify:play-config": "node src/scripts/verifyPlayBillingConfig.js",
     "verify:billing-modules": "node src/scripts/verifyBillingModuleGraph.js",
     "verify:premium-billing-flows": "node src/scripts/verifyPremiumBillingFlows.js",
+    "verify:premium-expiry-revert": "node src/scripts/verifyPremiumExpiryRevert.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

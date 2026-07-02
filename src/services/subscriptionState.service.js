@@ -1,6 +1,7 @@
 const { pool } = require("../config/db");
 const { STORE_PLATFORM } = require("../constants/storePlatforms");
 const storeBillingLedger = require("./storeBillingLedger.service");
+const { revertPremiumExclusiveSettings } = require("./premiumExclusiveSettings.service");
 const { debugLog } = require("../utils/serverDebugLog");
 
 const STATE_ACTIVE = "SUBSCRIPTION_STATE_ACTIVE";
@@ -103,6 +104,7 @@ async function applyUserPremiumFromState(client, {
        WHERE id = $1`,
       [userId, status]
     );
+    await revertPremiumExclusiveSettings(client, userId);
   } else if (status === "EXPIRED" || !grantsAccess) {
     await client.query(
       `UPDATE users
@@ -112,6 +114,7 @@ async function applyUserPremiumFromState(client, {
        WHERE id = $1`,
       [userId]
     );
+    await revertPremiumExclusiveSettings(client, userId);
   }
 
   return { grantsAccess, status, expiryIso, autoRenewing };

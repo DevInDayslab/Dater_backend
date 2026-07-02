@@ -156,9 +156,27 @@ pm2 restart dater-api
 
 ---
 
+## H. Premium expiry — revert exclusive settings
+
+| Step | Setup | Action | Expected |
+|------|-------|--------|----------|
+| H1 | Premium + switch city + privacy + advanced filters | Let subscription expire (license tester) or run reconcile after Google expiry | All three reverted in DB |
+| H2 | Same | Reopen app | Feed uses home city; privacy badge gone; advanced filters empty in UI |
+| H3 | Cancelled sub, still in paid period | Wait | Settings **stay** until actual expiry |
+| H4 | Expired + boost credits in wallet | Expire premium | Boost credits unchanged; active boost timer unchanged |
+| H5 | Expired | Try enable privacy / switch city | `402 PREMIUM_REQUIRED` |
+
+Before/after DB inspection: `node src/scripts/inspectPremiumByPhone.js <phone>`
+
+Automated server check: `npm run verify:premium-expiry-revert`
+
+Optional DB integration (rolls back): set `VERIFY_PREMIUM_EXPIRY_USER_ID=<uuid>` and re-run the verify script.
+
+---
+
 ## Deploy order (every billing fix)
 
-1. Push backend → EC2 pull → `npm run verify:play-config` → `npm run verify:billing-modules` → `pm2 restart dater-api`
+1. Push backend → EC2 pull → `npm run verify:play-config` → `npm run verify:billing-modules` → `npm run verify:premium-expiry-revert` → `pm2 restart dater-api`
 2. Confirm A4 logs clean
 3. Build & upload AAB to Internal testing (if Android changed)
 4. Run checklist sections C → D → E on license tester device
