@@ -138,26 +138,6 @@ async function verifyGooglePlaySubscription({
   basePlanId,
 }) {
   const platform = STORE_PLATFORM.GOOGLE_PLAY;
-  const product = await productConfigService.getProductByPackCode(packCode);
-  if (!product || product.category !== "PREMIUM") {
-    const err = new Error("Invalid premium pack");
-    err.code = "INVALID_PREMIUM_PLAN";
-    throw err;
-  }
-  if (product.googlePlayProductId && product.googlePlayProductId !== productId) {
-    const err = new Error("Product ID does not match catalog");
-    err.code = "PRODUCT_MISMATCH";
-    throw err;
-  }
-  if (
-    product.googlePlayBasePlanId &&
-    basePlanId &&
-    String(product.googlePlayBasePlanId).toLowerCase() !== String(basePlanId).toLowerCase()
-  ) {
-    const err = new Error("Base plan does not match catalog");
-    err.code = "BASE_PLAN_MISMATCH";
-    throw err;
-  }
 
   const subscription = await googlePlayBilling.verifySubscription({ purchaseToken });
   const subscriptionState = String(subscription?.subscriptionState || "");
@@ -169,8 +149,29 @@ async function verifyGooglePlaySubscription({
 
   const lineItem = pickSubscriptionLineItem(subscription, {
     productId,
-    basePlanId: basePlanId || product.googlePlayBasePlanId,
+    basePlanId,
   });
+  const resolvedBasePlanId = lineItem?.offerDetails?.basePlanId || basePlanId || null;
+  const resolvedProductId = lineItem?.productId || productId;
+
+  let product = await productConfigService.getProductByGooglePlayProductId(resolvedProductId, {
+    basePlanId: resolvedBasePlanId,
+  });
+  if ((!product || product.category !== "PREMIUM") && packCode) {
+    product = await productConfigService.getProductByPackCode(packCode);
+  }
+  if (!product || product.category !== "PREMIUM") {
+    const err = new Error("Invalid premium pack");
+    err.code = "INVALID_PREMIUM_PLAN";
+    throw err;
+  }
+  if (product.googlePlayProductId && product.googlePlayProductId !== resolvedProductId) {
+    const err = new Error("Product ID does not match catalog");
+    err.code = "PRODUCT_MISMATCH";
+    throw err;
+  }
+
+  const effectiveBasePlanId = resolvedBasePlanId || product.googlePlayBasePlanId;
   const expiryTime = lineItem?.expiryTime;
   if (!expiryTime) {
     const err = new Error("Subscription expiry missing from Google");
@@ -196,19 +197,19 @@ async function verifyGooglePlaySubscription({
   const autoRenewing = Boolean(lineItem?.autoRenewingPlan?.autoRenewEnabled);
   const metadata = storeMetadata(platform, {
     purchaseToken,
-    productId,
+    productId: resolvedProductId,
     orderId: storeOrderId,
-    basePlanId: lineItem?.offerDetails?.basePlanId || basePlanId || product.googlePlayBasePlanId,
+    basePlanId: effectiveBasePlanId,
   });
 
   await subscriptionStateService.applySubscriptionStateFromGoogle({
     userId,
     subscription,
     purchaseToken,
-    productId,
+    productId: resolvedProductId,
     packCode: product.packCode,
     planCode: product.planCode,
-    basePlanId: basePlanId || product.googlePlayBasePlanId,
+    basePlanId: effectiveBasePlanId,
     source: "verify",
   });
 
@@ -246,7 +247,7 @@ async function verifyGooglePlaySubscription({
       userId,
       storeOrderId,
       purchaseToken,
-      storeProductId: productId,
+      storeProductId: resolvedProductId,
       packCode: product.packCode,
       purchaseType: "SUBSCRIPTION",
       storeState: subscriptionState,
@@ -262,7 +263,7 @@ async function verifyGooglePlaySubscription({
   }
 
   try {
-    await googlePlayBilling.acknowledgeSubscription({ productId, purchaseToken });
+    await googlePlayBilling.acknowledgeSubscription({ productId: resolvedProductId, purchaseToken });
     await pool.query(
       `UPDATE store_purchase_verifications
        SET acknowledged_at = NOW(), updated_at = NOW()
@@ -441,8 +442,27 @@ async function verifyPurchase({
   const normalizedToken = String(purchaseToken || "").trim();
   const normalizedProductId = String(productId || "").trim();
   const normalizedPackCode = String(packCode || "").trim();
-  if (!normalizedToken || !normalizedProductId || !normalizedPackCode) {
-    const err = new Error("purchaseToken, productId, and packCode are required");
+  if (!normalizedToken || !normalizedProductId) {
+    const err = new Error("purchaseToken and productId are required");
+    err.code = "INVALID_INPUT";
+    throw err;
+  }
+
+  if (!normalizedPackCode) {
+    const premiumProduct = await productConfigService.getProductByGooglePlayProductId(
+      normalizedProductId,
+      { basePlanId }
+    );
+    if (premiumProduct?.category === "PREMIUM") {
+      return verifyGooglePlaySubscription({
+        userId,
+        purchaseToken: normalizedToken,
+        productId: normalizedProductId,
+        packCode: null,
+        basePlanId,
+      });
+    }
+    const err = new Error("packCode is required for one-time purchases");
     err.code = "INVALID_INPUT";
     throw err;
   }

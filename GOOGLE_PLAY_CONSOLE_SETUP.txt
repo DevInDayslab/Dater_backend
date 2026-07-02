@@ -25,8 +25,20 @@ Create these products in Play Console for `com.daterplat.app` before end-to-end 
 
 ```env
 GOOGLE_PLAY_PACKAGE_NAME=com.daterplat.app
-GOOGLE_PLAY_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+GOOGLE_PLAY_SERVICE_ACCOUNT_PATH=./secrets/google-play-service-account.json
 BILLING_DEV_MODE=false
+```
+
+**Important:** Do NOT paste multiline JSON into `.env` — dotenv truncates at the first
+newline and billing will fail with `PLAY_NOT_CONFIGURED`. Either:
+
+- Put the JSON file at `backend/secrets/google-play-service-account.json` (gitignored), or
+- Use a single-line minified `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON={"type":"service_account",...}`
+
+Verify on the server after deploy:
+
+```bash
+npm run verify:play-config
 ```
 
 ## RTDN (Real-time developer notifications)
