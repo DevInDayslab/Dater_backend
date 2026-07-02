@@ -3,6 +3,7 @@ const { debugLog } = require("../utils/serverDebugLog");
 const productConfigService = require("./productConfig.service");
 const chatService = require("./chat.service");
 const { hasPremiumAccess } = require("./subscriptionState.service");
+const { clearPrivacyModeOnPremiumLoss } = require("./premiumExclusiveSettings.service");
 
 function toIsoOrNull(v) {
   return v ? new Date(v).toISOString() : null;
@@ -102,7 +103,11 @@ async function syncPremiumState(client, userId) {
      RETURNING is_premium, premium_started_at, premium_expires_at, premium_plan_code, premium_status`,
     [userId]
   );
-  return res.rows[0] || null;
+  const after = res.rows[0] || null;
+  if (after && !hasPremiumAccess(after)) {
+    await clearPrivacyModeOnPremiumLoss(client, userId);
+  }
+  return after;
 }
 
 async function getBoostSnapshot(client, userId) {

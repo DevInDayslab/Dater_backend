@@ -1,7 +1,7 @@
 const { pool } = require("../config/db");
 const { STORE_PLATFORM } = require("../constants/storePlatforms");
 const storeBillingLedger = require("./storeBillingLedger.service");
-const { revertPremiumExclusiveSettings } = require("./premiumExclusiveSettings.service");
+const { revertPremiumExclusiveSettings, clearPrivacyModeOnPremiumLoss } = require("./premiumExclusiveSettings.service");
 const { debugLog } = require("../utils/serverDebugLog");
 
 const STATE_ACTIVE = "SUBSCRIPTION_STATE_ACTIVE";
@@ -116,8 +116,8 @@ async function applyUserPremiumFromState(client, {
     );
     await revertPremiumExclusiveSettings(client, userId);
   } else if (!grantsAccess) {
-    // Past expiry or stale line item — sync DB flags only. Do not revert settings here;
-    // auto-renew may be in flight via Play verify. Revert only on explicit EXPIRED/ON_HOLD/PAUSED above.
+    // Past expiry or stale line item — sync DB flags only. Do not revert filters/city here;
+    // auto-renew may be in flight via Play verify. Privacy must still turn off immediately.
     await client.query(
       `UPDATE users
        SET is_premium = FALSE,
@@ -126,6 +126,7 @@ async function applyUserPremiumFromState(client, {
        WHERE id = $1`,
       [userId]
     );
+    await clearPrivacyModeOnPremiumLoss(client, userId);
   }
 
   return { grantsAccess, status, expiryIso, autoRenewing };

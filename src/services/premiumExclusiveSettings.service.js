@@ -58,9 +58,26 @@ function stripPremiumExclusiveFiltersFromSnapshot(filters) {
   };
 }
 
+/** Turn off privacy mode when premium access ends — always, including lazy /me sync. Idempotent. */
+async function clearPrivacyModeOnPremiumLoss(client, userId) {
+  const privacyRes = await client.query(
+    `UPDATE users
+     SET account_state = 'ACTIVE',
+         updated_at = NOW()
+     WHERE id = $1
+       AND account_state = 'PRIVACY_MODE'
+     RETURNING id`,
+    [userId]
+  );
+  if (privacyRes.rowCount) {
+    debugLog("premium_privacy_mode_cleared", { userId });
+  }
+  return Boolean(privacyRes.rowCount);
+}
+
 /**
- * Clears subscription-exclusive settings when premium access ends.
- * Idempotent — safe to call on every expiry sync path.
+ * Clears subscription-exclusive settings when premium access ends (filters + switch city + privacy).
+ * Idempotent — use on confirmed Google EXPIRED / ON_HOLD / PAUSED only.
  */
 async function revertPremiumExclusiveSettings(client, userId) {
   await client.query(
@@ -71,24 +88,17 @@ async function revertPremiumExclusiveSettings(client, userId) {
     [userId]
   );
   await clearAdvancedFilterPreferencesFromDb(client, userId);
-  const privacyRes = await client.query(
-    `UPDATE users
-     SET account_state = 'ACTIVE',
-         updated_at = NOW()
-     WHERE id = $1
-       AND account_state = 'PRIVACY_MODE'
-     RETURNING id`,
-    [userId]
-  );
+  const privacyModeCleared = await clearPrivacyModeOnPremiumLoss(client, userId);
   debugLog("premium_exclusive_settings_reverted", {
     userId,
-    privacyModeCleared: Boolean(privacyRes.rowCount),
+    privacyModeCleared,
   });
 }
 
 module.exports = {
   ADVANCED_FILTER_JUNCTION_TABLES,
   clearAdvancedFilterPreferencesFromDb,
+  clearPrivacyModeOnPremiumLoss,
   stripPremiumExclusiveFiltersFromSnapshot,
   revertPremiumExclusiveSettings,
 };
