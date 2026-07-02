@@ -3,7 +3,6 @@ const { debugLog } = require("../utils/serverDebugLog");
 const productConfigService = require("./productConfig.service");
 const chatService = require("./chat.service");
 const { hasPremiumAccess } = require("./subscriptionState.service");
-const { revertPremiumExclusiveSettings } = require("./premiumExclusiveSettings.service");
 
 function toIsoOrNull(v) {
   return v ? new Date(v).toISOString() : null;
@@ -80,16 +79,6 @@ function computeBoostMinutes(activateCount) {
 }
 
 async function syncPremiumState(client, userId) {
-  const beforeRes = await client.query(
-    `SELECT is_premium, premium_started_at, premium_expires_at, premium_plan_code, premium_status
-     FROM users
-     WHERE id = $1
-     LIMIT 1`,
-    [userId]
-  );
-  const before = beforeRes.rows[0] || null;
-  const hadAccess = hasPremiumAccess(before);
-
   const res = await client.query(
     `UPDATE users
      SET is_premium = CASE
@@ -113,11 +102,7 @@ async function syncPremiumState(client, userId) {
      RETURNING is_premium, premium_started_at, premium_expires_at, premium_plan_code, premium_status`,
     [userId]
   );
-  const after = res.rows[0] || null;
-  if (hadAccess && !hasPremiumAccess(after)) {
-    await revertPremiumExclusiveSettings(client, userId);
-  }
-  return after;
+  return res.rows[0] || null;
 }
 
 async function getBoostSnapshot(client, userId) {

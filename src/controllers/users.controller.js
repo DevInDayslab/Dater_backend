@@ -7,7 +7,7 @@ const profileMeExtension = require("../services/profileMeExtension.service");
 const s3Media = require("../services/s3Media.service");
 const entitlementsService = require("../services/entitlements.service");
 const { hasPremiumAccess } = require("../services/subscriptionState.service");
-const { clearAdvancedFilterPreferencesFromDb } = require("../services/premiumExclusiveSettings.service");
+const { stripPremiumExclusiveFiltersFromSnapshot } = require("../services/premiumExclusiveSettings.service");
 const verificationService = require("../services/verification.service");
 const socialService = require("../services/social.service");
 const accountLifecycle = require("../services/accountLifecycle.service");
@@ -491,20 +491,7 @@ async function getMyFilters(req, res) {
         message: "User not found",
       });
     }
-    if (!hasPremiumAccess(userRowRes.rows[0])) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        await ensureUserFiltersRow(client, userId);
-        await clearAdvancedFilterPreferencesFromDb(client, userId);
-        await client.query("COMMIT");
-      } catch (e) {
-        await client.query("ROLLBACK");
-        throw e;
-      } finally {
-        client.release();
-      }
-    }
+    const isPremiumUser = hasPremiumAccess(userRowRes.rows[0]);
     const filters = await loadUserFiltersSnapshot(userId);
     if (!filters) {
       return res.status(404).json({
@@ -515,7 +502,7 @@ async function getMyFilters(req, res) {
     return res.status(200).json({
       success: true,
       message: "Filter preferences fetched",
-      data: filters,
+      data: isPremiumUser ? filters : stripPremiumExclusiveFiltersFromSnapshot(filters),
     });
   } catch (error) {
     return res.status(500).json({
@@ -668,9 +655,6 @@ async function updateMyFilters(req, res) {
   try {
     await client.query("BEGIN");
     await ensureUserFiltersRow(client, userId);
-    if (!isPremiumUser) {
-      await clearAdvancedFilterPreferencesFromDb(client, userId);
-    }
 
     const scalarSet = [];
     const scalarValues = [userId];
@@ -741,7 +725,7 @@ async function updateMyFilters(req, res) {
     return res.status(200).json({
       success: true,
       message: "Filter preferences updated",
-      data: filters,
+      data: isPremiumUser ? filters : stripPremiumExclusiveFiltersFromSnapshot(filters),
     });
   } catch (error) {
     await client.query("ROLLBACK");

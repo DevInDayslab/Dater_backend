@@ -105,7 +105,7 @@ async function applyUserPremiumFromState(client, {
       [userId, status]
     );
     await revertPremiumExclusiveSettings(client, userId);
-  } else if (status === "EXPIRED" || !grantsAccess) {
+  } else if (status === "EXPIRED") {
     await client.query(
       `UPDATE users
        SET is_premium = FALSE,
@@ -115,6 +115,17 @@ async function applyUserPremiumFromState(client, {
       [userId]
     );
     await revertPremiumExclusiveSettings(client, userId);
+  } else if (!grantsAccess) {
+    // Past expiry or stale line item — sync DB flags only. Do not revert settings here;
+    // auto-renew may be in flight via Play verify. Revert only on explicit EXPIRED/ON_HOLD/PAUSED above.
+    await client.query(
+      `UPDATE users
+       SET is_premium = FALSE,
+           premium_status = 'EXPIRED',
+           updated_at = NOW()
+       WHERE id = $1`,
+      [userId]
+    );
   }
 
   return { grantsAccess, status, expiryIso, autoRenewing };

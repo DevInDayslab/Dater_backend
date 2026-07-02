@@ -32,6 +32,32 @@ async function clearAdvancedFilterPreferencesFromDb(client, userId) {
   );
 }
 
+/** Response-only mask for non-premium clients — does not mutate DB (preserves settings across renewal). */
+function stripPremiumExclusiveFiltersFromSnapshot(filters) {
+  if (!filters) return filters;
+  return {
+    ...filters,
+    selectedLocation: "__CURRENT_LOCATION__",
+    usingSwitchCity: false,
+    minHeightInches: null,
+    maxHeightInches: null,
+    showOtherPeopleIfRunOut: true,
+    maritalStatuses: [],
+    lookingFor: [],
+    drinkingPreferences: [],
+    smokingPreferences: [],
+    exercisePreferences: [],
+    religionPreferences: [],
+    educationPreferences: [],
+    starSignPreferences: [],
+    kidsPreferences: [],
+    politicalPreferences: [],
+    petPreferences: [],
+    ethnicityPreferences: [],
+    pronounPreferences: [],
+  };
+}
+
 /**
  * Clears subscription-exclusive settings when premium access ends.
  * Idempotent — safe to call on every expiry sync path.
@@ -63,5 +89,6 @@ async function revertPremiumExclusiveSettings(client, userId) {
 module.exports = {
   ADVANCED_FILTER_JUNCTION_TABLES,
   clearAdvancedFilterPreferencesFromDb,
+  stripPremiumExclusiveFiltersFromSnapshot,
   revertPremiumExclusiveSettings,
 };
