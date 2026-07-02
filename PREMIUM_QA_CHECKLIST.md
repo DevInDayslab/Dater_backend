@@ -45,6 +45,67 @@ Use this after every backend deploy and Android billing build. Run server checks
 
 ---
 
+### Flow 2 — Restore purchase (`ITEM_ALREADY_OWNED`)
+
+**Setup:** User already has active Play subscription but backend premium stripped (or new login).
+
+| # | Action | Expected |
+|---|--------|----------|
+| R1 | Open paywall → tap Subscribe | Play says "already subscribed" |
+| R2 | App behavior | Calls `restoreExistingPremiumPurchase` → verify-purchase → premium granted |
+| R3 | Kill app → reopen | `reconcilePremiumPurchases()` on billing connect keeps premium |
+
+**DB check after R2:**
+```bash
+node src/scripts/inspectPremiumByPhone.js <phone_digits>
+```
+
+---
+
+### Flow 3 — Cancel (keep access until period end)
+
+| # | Action | Expected |
+|---|--------|----------|
+| C1 | Play Store → Subscriptions → Cancel Dater Premium | — |
+| C2 | Wait for RTDN type 3 **or** run `npm run billing:reconcile-subscriptions` | `premium_status=CANCELLED`, `is_premium=true` until expiry |
+| C3 | App | Premium features still work until expiry date |
+| C4 | DB | `store_subscriptions.store_state` reflects canceled state |
+
+---
+
+### Flow 4 — Auto-renewal (license tester accelerated)
+
+| # | Action | Expected |
+|---|--------|----------|
+| N1 | Keep subscription active; wait ~5 min (license tester week plan) | — |
+| N2 | RTDN type 2 **or** `npm run billing:reconcile-subscriptions` | `premium_expires_at` extends |
+| N3 | App restart | Premium still active with new expiry |
+
+---
+
+### Flow 5 — Expiry / resubscribe after lapse
+
+| # | Action | Expected |
+|---|--------|----------|
+| E1 | Let subscription expire after cancel period | RTDN type 13 or reconcile |
+| E2 | DB | `is_premium=false`, `premium_status=EXPIRED` |
+| E3 | App | Upgrade pill returns |
+| E4 | Resubscribe via paywall | Premium re-granted |
+
+---
+
+### Automated backend checks (run on EC2)
+
+```bash
+npm run verify:play-config
+npm run verify:billing-modules
+npm run verify:products-catalog
+npm run verify:premium-billing-flows
+pm2 restart dater-api
+```
+
+---
+
 ## D. Purchase & verify (subscription)
 
 | # | Scenario | Steps | Pass criteria |
