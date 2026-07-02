@@ -1,6 +1,6 @@
 const { pool } = require("../config/db");
 const { STORE_PLATFORM } = require("../constants/storePlatforms");
-const billingVerificationService = require("./billingVerification.service");
+const storeBillingLedger = require("./storeBillingLedger.service");
 const { debugLog } = require("../utils/serverDebugLog");
 
 const STATE_ACTIVE = "SUBSCRIPTION_STATE_ACTIVE";
@@ -129,7 +129,7 @@ async function applySubscriptionStateFromGoogle({
   notificationType,
 }) {
   const subscriptionState = String(subscription?.subscriptionState || "");
-  const lineItem = billingVerificationService.pickSubscriptionLineItem(subscription, {
+  const lineItem = storeBillingLedger.pickSubscriptionLineItem(subscription, {
     productId,
     basePlanId,
   });
@@ -140,7 +140,7 @@ async function applySubscriptionStateFromGoogle({
   const resolvedProductId = lineItem?.productId || productId || null;
   const resolvedBasePlanId = lineItem?.offerDetails?.basePlanId || basePlanId || null;
 
-  const metadata = billingVerificationService.storeMetadata(STORE_PLATFORM.GOOGLE_PLAY, {
+  const metadata = storeBillingLedger.storeMetadata(STORE_PLATFORM.GOOGLE_PLAY, {
     purchaseToken,
     productId: resolvedProductId,
     orderId: storeOrderId,
@@ -169,7 +169,7 @@ async function applySubscriptionStateFromGoogle({
     });
 
     if (purchaseToken) {
-      await billingVerificationService.upsertStoreSubscription(client, {
+      await storeBillingLedger.upsertStoreSubscription(client, {
         platform: STORE_PLATFORM.GOOGLE_PLAY,
         userId,
         storeProductId: resolvedProductId,
@@ -205,7 +205,7 @@ async function applySubscriptionStateFromGoogle({
 
 async function applyCanceledSubscription({ userId, subscription, purchaseToken, notificationType }) {
   const subscriptionState = String(subscription?.subscriptionState || STATE_CANCELED);
-  const lineItem = billingVerificationService.pickSubscriptionLineItem(subscription, {
+  const lineItem = storeBillingLedger.pickSubscriptionLineItem(subscription, {
     productId: subscription?.lineItems?.[0]?.productId,
   });
   const expiryTime = lineItem?.expiryTime || null;
@@ -228,7 +228,7 @@ async function applyCanceledSubscription({ userId, subscription, purchaseToken, 
       );
     }
     if (purchaseToken) {
-      await billingVerificationService.upsertStoreSubscription(client, {
+      await storeBillingLedger.upsertStoreSubscription(client, {
         platform: STORE_PLATFORM.GOOGLE_PLAY,
         userId,
         storeProductId: lineItem?.productId,
