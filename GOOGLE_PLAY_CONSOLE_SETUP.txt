@@ -42,6 +42,7 @@ npm run verify:play-config
 ```
 
 ## RTDN (Real-time developer notifications)
+
 1. Create Pub/Sub topic `play-rtdn` in GCP
 2. Play Console → Monetization → Real-time developer notifications → link topic
 3. Grant `pubsub.publisher` to `google-play-developer-notifications@system.gserviceaccount.com`
@@ -53,6 +54,11 @@ GOOGLE_PLAY_RTDN_AUDIENCE=https://<api-host>/api/v1/billing/google-webhook
 ```
 
 The backend verifies Pub/Sub push JWTs via `google-auth-library` (`pubsubAuth.middleware.js`).
+
+**If renewals charge on Play but premium expires in the app:** RTDN is likely not reaching the server.
+Check `SELECT COUNT(*) FROM store_webhook_events` — should grow after renewals.
+Fallback: schedule `npm run billing:reconcile-subscriptions` daily (or every 15 min during testing).
+The app also re-syncs on launch via `BillingManager.reconcilePremiumPurchases()`.
 
 ## License testers
 Add tester Google accounts in Play Console → Setup → License testing (accelerated renewals ~5 min per “month”).

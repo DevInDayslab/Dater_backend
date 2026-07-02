@@ -12,6 +12,88 @@ const PENDING_SUBSCRIPTION_STATES = new Set(["SUBSCRIPTION_STATE_PENDING"]);
 
 const { storeMetadata, pickSubscriptionLineItem, upsertStoreSubscription } = storeBillingLedger;
 
+async function resolvePremiumProductFromSubscription(subscription, { productId, basePlanId, packCode } = {}) {
+  const lineItem = pickSubscriptionLineItem(subscription, { productId, basePlanId });
+  const resolvedBasePlanId = lineItem?.offerDetails?.basePlanId || basePlanId || null;
+  const resolvedProductId = lineItem?.productId || productId || null;
+
+  let product = await productConfigService.getProductByGooglePlayProductId(resolvedProductId, {
+    basePlanId: resolvedBasePlanId,
+  });
+  if ((!product || product.category !== "PREMIUM") && packCode) {
+    product = await productConfigService.getProductByPackCode(packCode);
+  }
+
+  return {
+    product,
+    lineItem,
+    resolvedProductId,
+    effectiveBasePlanId: resolvedBasePlanId || product?.googlePlayBasePlanId || null,
+  };
+}
+
+async function ensureSubscriptionAcknowledged({
+  userId,
+  productId,
+  purchaseToken,
+  storeOrderId,
+}) {
+  if (!productId || !purchaseToken) return;
+  const unacked = await pool.query(
+    `SELECT store_order_id
+     FROM store_purchase_verifications
+     WHERE platform = $1
+       AND purchase_token = $2
+       AND purchase_type = 'SUBSCRIPTION'
+       AND acknowledged_at IS NULL
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [STORE_PLATFORM.GOOGLE_PLAY, purchaseToken]
+  );
+  const orderToAck = unacked.rows[0]?.store_order_id || storeOrderId;
+  try {
+    await googlePlayBilling.acknowledgeSubscription({ productId, purchaseToken });
+    if (orderToAck) {
+      await pool.query(
+        `UPDATE store_purchase_verifications
+         SET acknowledged_at = NOW(), updated_at = NOW()
+         WHERE platform = $1 AND store_order_id = $2`,
+        [STORE_PLATFORM.GOOGLE_PLAY, orderToAck]
+      );
+    }
+  } catch (ackErr) {
+    debugLog("billing_ack_failed", { userId, storeOrderId: orderToAck, message: ackErr.message });
+  }
+}
+
+async function syncSubscriptionStateFromGoogle({
+  userId,
+  subscription,
+  purchaseToken,
+  productId,
+  packCode,
+  basePlanId,
+  source,
+  notificationType,
+}) {
+  const { product, resolvedProductId, effectiveBasePlanId } =
+    await resolvePremiumProductFromSubscription(subscription, { productId, basePlanId, packCode });
+
+  await subscriptionStateService.applySubscriptionStateFromGoogle({
+    userId,
+    subscription,
+    purchaseToken,
+    productId: resolvedProductId || productId,
+    packCode: product?.packCode || packCode || null,
+    planCode: product?.planCode || null,
+    basePlanId: effectiveBasePlanId,
+    source,
+    notificationType,
+  });
+
+  return { product, resolvedProductId, effectiveBasePlanId };
+}
+
 async function findExistingStorePurchase(platform, storeOrderId) {
   if (!storeOrderId) return null;
   const res = await pool.query(
@@ -83,19 +165,9 @@ async function verifyGooglePlaySubscription({
     throw err;
   }
 
-  const lineItem = pickSubscriptionLineItem(subscription, {
-    productId,
-    basePlanId,
-  });
-  const resolvedBasePlanId = lineItem?.offerDetails?.basePlanId || basePlanId || null;
-  const resolvedProductId = lineItem?.productId || productId;
+  const { product, lineItem, resolvedProductId, effectiveBasePlanId } =
+    await resolvePremiumProductFromSubscription(subscription, { productId, basePlanId, packCode });
 
-  let product = await productConfigService.getProductByGooglePlayProductId(resolvedProductId, {
-    basePlanId: resolvedBasePlanId,
-  });
-  if ((!product || product.category !== "PREMIUM") && packCode) {
-    product = await productConfigService.getProductByPackCode(packCode);
-  }
   if (!product || product.category !== "PREMIUM") {
     const err = new Error("Invalid premium pack");
     err.code = "INVALID_PREMIUM_PLAN";
@@ -107,37 +179,24 @@ async function verifyGooglePlaySubscription({
     throw err;
   }
 
-  const effectiveBasePlanId = resolvedBasePlanId || product.googlePlayBasePlanId;
   const expiryTime = lineItem?.expiryTime;
   if (!expiryTime) {
     const err = new Error("Subscription expiry missing from Google");
     err.code = "INVALID_SUBSCRIPTION";
     throw err;
   }
-  if (!subscriptionStateService.subscriptionStateGrantsAccess(subscriptionState, expiryTime)) {
-    const err = new Error("Subscription is not active");
-    err.code = "SUBSCRIPTION_INACTIVE";
-    throw err;
-  }
+
+  const grantsAccess = subscriptionStateService.subscriptionStateGrantsAccess(
+    subscriptionState,
+    expiryTime
+  );
 
   const storeOrderId =
     subscription?.latestOrderId ||
     lineItem?.latestSuccessfulOrderId ||
     `play_sub_${purchaseToken.slice(0, 24)}`;
 
-  const existing = await findExistingStorePurchase(platform, storeOrderId);
-  if (existing?.user_id && String(existing.user_id) === String(userId)) {
-    return entitlementsService.getEntitlementsSnapshot(userId);
-  }
-
-  const autoRenewing = Boolean(lineItem?.autoRenewingPlan?.autoRenewEnabled);
-  const metadata = storeMetadata(platform, {
-    purchaseToken,
-    productId: resolvedProductId,
-    orderId: storeOrderId,
-    basePlanId: effectiveBasePlanId,
-  });
-
+  // Always mirror Google's truth before returning — fixes renewal drift when RTDN is down.
   await subscriptionStateService.applySubscriptionStateFromGoogle({
     userId,
     subscription,
@@ -147,6 +206,41 @@ async function verifyGooglePlaySubscription({
     planCode: product.planCode,
     basePlanId: effectiveBasePlanId,
     source: "verify",
+  });
+
+  await ensureSubscriptionAcknowledged({
+    userId,
+    productId: resolvedProductId,
+    purchaseToken,
+    storeOrderId,
+  });
+
+  const existing = await findExistingStorePurchase(platform, storeOrderId);
+  if (existing?.user_id && String(existing.user_id) === String(userId)) {
+    return entitlementsService.getEntitlementsSnapshot(userId);
+  }
+
+  if (!grantsAccess) {
+    const priorSub = await pool.query(
+      `SELECT 1 FROM store_subscriptions
+       WHERE user_id = $1 AND platform = $2 AND purchase_token = $3
+       LIMIT 1`,
+      [userId, platform, purchaseToken]
+    );
+    if (priorSub.rows.length) {
+      return entitlementsService.getEntitlementsSnapshot(userId);
+    }
+    const err = new Error("Subscription is not active");
+    err.code = "SUBSCRIPTION_INACTIVE";
+    throw err;
+  }
+
+  const autoRenewing = Boolean(lineItem?.autoRenewingPlan?.autoRenewEnabled);
+  const metadata = storeMetadata(platform, {
+    purchaseToken,
+    productId: resolvedProductId,
+    orderId: storeOrderId,
+    basePlanId: effectiveBasePlanId,
   });
 
   const normalizedPlan = String(product.planCode || "").trim().toUpperCase();
@@ -198,17 +292,12 @@ async function verifyGooglePlaySubscription({
     client.release();
   }
 
-  try {
-    await googlePlayBilling.acknowledgeSubscription({ productId: resolvedProductId, purchaseToken });
-    await pool.query(
-      `UPDATE store_purchase_verifications
-       SET acknowledged_at = NOW(), updated_at = NOW()
-       WHERE platform = $1 AND store_order_id = $2`,
-      [platform, storeOrderId]
-    );
-  } catch (ackErr) {
-    debugLog("billing_ack_failed", { userId, storeOrderId, message: ackErr.message });
-  }
+  await ensureSubscriptionAcknowledged({
+    userId,
+    productId: resolvedProductId,
+    purchaseToken,
+    storeOrderId,
+  });
 
   return entitlementsService.getEntitlementsSnapshot(userId);
 }
@@ -439,6 +528,9 @@ module.exports = {
   recordStorePurchaseVerification,
   pickSubscriptionLineItem,
   storeMetadata,
+  resolvePremiumProductFromSubscription,
+  syncSubscriptionStateFromGoogle,
+  ensureSubscriptionAcknowledged,
   // Back-compat aliases for RTDN service
   upsertPlaySubscription: upsertStoreSubscription,
   playMetadata: (fields) => storeMetadata(STORE_PLATFORM.GOOGLE_PLAY, fields),

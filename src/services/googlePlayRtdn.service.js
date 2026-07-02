@@ -64,9 +64,11 @@ async function handleSubscriptionNotification(notification) {
   }
 
   const subscription = await googlePlayBilling.verifySubscription({ purchaseToken });
-  const lineItem = billingVerificationService.pickSubscriptionLineItem(subscription, {
-    productId: notification?.subscriptionId,
-  });
+  const subscriptionId = notification?.subscriptionId;
+  const { product, lineItem, resolvedProductId, effectiveBasePlanId } =
+    await billingVerificationService.resolvePremiumProductFromSubscription(subscription, {
+      productId: subscriptionId,
+    });
   const storeOrderId = subscription?.latestOrderId || lineItem?.latestSuccessfulOrderId;
 
   if (notificationType === SUBSCRIPTION_CANCELED) {
@@ -84,29 +86,40 @@ async function handleSubscriptionNotification(notification) {
     notificationType === SUBSCRIPTION_PURCHASED ||
     notificationType === SUBSCRIPTION_RESTARTED
   ) {
-    await subscriptionStateService.applySubscriptionStateFromGoogle({
+    await billingVerificationService.syncSubscriptionStateFromGoogle({
       userId,
       subscription,
       purchaseToken,
-      productId: lineItem?.productId || notification?.subscriptionId,
+      productId: resolvedProductId || subscriptionId,
+      packCode: product?.packCode || null,
+      basePlanId: effectiveBasePlanId,
       source: "rtdn",
       notificationType,
     });
-    if (storeOrderId && notificationType === SUBSCRIPTION_RENEWED) {
+
+    await billingVerificationService.ensureSubscriptionAcknowledged({
+      userId,
+      productId: resolvedProductId || subscriptionId,
+      purchaseToken,
+      storeOrderId,
+    });
+
+    if (storeOrderId && notificationType === SUBSCRIPTION_RENEWED && product?.packCode) {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
         await entitlementsService.insertPurchase(client, {
           userId,
           itemType: "SUBSCRIPTION",
-          packCode: "PREMIUM_RENEWAL",
-          amountRupees: 0,
+          packCode: product.packCode,
+          amountRupees: Number(product.pricePaise || 0) / 100,
           quantity: 1,
           transactionId: storeOrderId,
           metadata: {
             source: "GOOGLE_PLAY_RENEWAL",
             notificationType,
             platform: PLATFORM,
+            planCode: product.planCode,
           },
         });
         await client.query("COMMIT");
@@ -128,22 +141,26 @@ async function handleSubscriptionNotification(notification) {
     notificationType === SUBSCRIPTION_EXPIRED ||
     notificationType === SUBSCRIPTION_REVOKED
   ) {
-    await subscriptionStateService.applySubscriptionStateFromGoogle({
+    await billingVerificationService.syncSubscriptionStateFromGoogle({
       userId,
       subscription,
       purchaseToken,
-      productId: lineItem?.productId || notification?.subscriptionId,
+      productId: resolvedProductId || subscriptionId,
+      packCode: product?.packCode || null,
+      basePlanId: effectiveBasePlanId,
       source: "rtdn",
       notificationType,
     });
     return;
   }
 
-  await subscriptionStateService.applySubscriptionStateFromGoogle({
+  await billingVerificationService.syncSubscriptionStateFromGoogle({
     userId,
     subscription,
     purchaseToken,
-    productId: lineItem?.productId || notification?.subscriptionId,
+    productId: resolvedProductId || subscriptionId,
+    packCode: product?.packCode || null,
+    basePlanId: effectiveBasePlanId,
     source: "rtdn",
     notificationType,
   });

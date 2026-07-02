@@ -4,7 +4,6 @@ const { STORE_PLATFORM } = require("../constants/storePlatforms");
 const { isPlayBillingConfigured } = require("../config/googlePlay");
 const googlePlayBilling = require("../services/googlePlayBilling.service");
 const billingVerificationService = require("../services/billingVerification.service");
-const subscriptionStateService = require("../services/subscriptionState.service");
 
 const PLATFORM = STORE_PLATFORM.GOOGLE_PLAY;
 
@@ -29,14 +28,21 @@ async function reconcilePlaySubscriptions() {
       const subscription = await googlePlayBilling.verifySubscription({
         purchaseToken: row.purchase_token,
       });
-      await subscriptionStateService.applySubscriptionStateFromGoogle({
+      await billingVerificationService.syncSubscriptionStateFromGoogle({
         userId: row.user_id,
         subscription,
         purchaseToken: row.purchase_token,
         productId: row.store_product_id,
         source: "reconcile",
       });
+      await billingVerificationService.ensureSubscriptionAcknowledged({
+        userId: row.user_id,
+        productId: row.store_product_id,
+        purchaseToken: row.purchase_token,
+        storeOrderId: subscription?.latestOrderId,
+      });
       updated += 1;
+      console.log("Reconciled user", row.user_id, "state", subscription?.subscriptionState);
     } catch (error) {
       console.error("Reconcile failed for user", row.user_id, error.message);
     }
