@@ -9,6 +9,9 @@ const EARTH_RADIUS_KM = 6371;
 const DEFAULT_COUNTRY_ISO2 = "IN";
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 50;
+/** Prefer a major city for GPS reverse-geocode (avoids tiny suburbs like Garhi over Ghaziabad). */
+const REVERSE_GEOCODE_MIN_POPULATION = 250000;
+const REVERSE_GEOCODE_SIGNIFICANT_RADIUS_M = 50000;
 
 function toRadians(value) {
   return (value * Math.PI) / 180;
@@ -70,16 +73,34 @@ async function getCityAndState(lat, lng, { countryIso2 = DEFAULT_COUNTRY_ISO2 } 
   }
 
   const iso2 = resolveCountryIso2(countryIso2);
-  const res = await query(
+  const pointSql = `ST_SetSRID(ST_MakePoint($3::double precision, $2::double precision), 4326)::geography`;
+  const baseParams = [iso2, latitude, longitude];
+
+  // Nearest major city within ~50 km (NCR suburbs should read Ghaziabad/Delhi, not Garhi).
+  const significantRes = await query(
     `SELECT id, city, admin_name, state_code, label, country, iso2, population, lat, lng
      FROM cities
      WHERE iso2 = $1
-     ORDER BY geom <-> ST_SetSRID(ST_MakePoint($3, $2), 4326)::geography
+       AND COALESCE(population, 0) >= $4
+       AND ST_DWithin(geom, ${pointSql}, $5)
+     ORDER BY geom <-> ${pointSql}
      LIMIT 1`,
-    [iso2, latitude, longitude]
+    [...baseParams, REVERSE_GEOCODE_MIN_POPULATION, REVERSE_GEOCODE_SIGNIFICANT_RADIUS_M]
   );
 
-  const row = res.rows[0];
+  let row = significantRes.rows[0];
+  if (!row) {
+    const nearestRes = await query(
+      `SELECT id, city, admin_name, state_code, label, country, iso2, population, lat, lng
+       FROM cities
+       WHERE iso2 = $1
+       ORDER BY geom <-> ${pointSql}
+       LIMIT 1`,
+      baseParams
+    );
+    row = nearestRes.rows[0];
+  }
+
   if (!row) return null;
   const mapped = mapCityRow(row);
   return {

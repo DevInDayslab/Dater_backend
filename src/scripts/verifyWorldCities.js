@@ -110,6 +110,17 @@ async function auditGeocoder() {
     fail("country scoping PK should not return Amritsar", wrongCountry.cityStateLabel);
   }
   ok("country scoping isolates IN vs PK");
+
+  // Ramprastha / NCR suburb: should prefer Ghaziabad or Delhi, not tiny Garhi (3.5 km).
+  const ramprastha = await getCityAndState(28.663287, 77.3247703, { countryIso2: "IN" });
+  const ramLabel = String(ramprastha?.cityStateLabel || "").toLowerCase();
+  if (ramLabel.includes("garhi")) {
+    fail("NCR suburb should not resolve to Garhi", ramprastha?.cityStateLabel);
+  }
+  if (!ramLabel.includes("ghaziabad") && !ramLabel.includes("delhi") && !ramLabel.includes("noida")) {
+    fail("NCR suburb major city", ramprastha?.cityStateLabel);
+  }
+  ok(`NCR suburb (Ramprastha coords) → ${ramprastha.cityStateLabel}`);
 }
 
 async function auditAnchors() {
