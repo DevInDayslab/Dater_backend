@@ -12,20 +12,20 @@ const ONLINE_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
 
 /**
  * Full-profile distance only (`getPublicProfile`): endpoints align with feed browse anchors
- * (`user_filters.preferred_location_city` → `resolveIndiaBrowseAnchor` / `india_cities.json`).
+ * (`user_filters.preferred_location_city` → `resolveIndiaBrowseAnchor` / Postgres `cities` table).
  *
  * Per side: if that user has a non-empty preferred switch city, use resolved anchor lat/lng;
  * if the label cannot be resolved, fall back to that user’s GPS (`users.location`). If they
  * have no switch city set, the endpoint is always GPS. Distance is haversine between the two
  * endpoints (matches feed anchor geometry in practice; not used on feed cards in this pass).
  */
-function computeFullProfileDistanceKm(row) {
+async function computeFullProfileDistanceKm(row) {
   const viewerPref = String(row.viewer_preferred_location_city || "").trim();
   const targetPref = String(row.preferred_location_city || "").trim();
 
-  function sideEndpoint(prefRaw, latRaw, lngRaw) {
+  async function sideEndpoint(prefRaw, latRaw, lngRaw) {
     if (prefRaw) {
-      const anchor = geocoderService.resolveIndiaBrowseAnchor(prefRaw);
+      const anchor = await geocoderService.resolveIndiaBrowseAnchor(prefRaw);
       if (anchor) return { lat: anchor.lat, lng: anchor.lng };
     }
     const lat = Number(latRaw);
@@ -34,20 +34,20 @@ function computeFullProfileDistanceKm(row) {
     return null;
   }
 
-  const a = sideEndpoint(viewerPref, row.viewer_location_latitude, row.viewer_location_longitude);
-  const b = sideEndpoint(targetPref, row.location_latitude, row.location_longitude);
+  const a = await sideEndpoint(viewerPref, row.viewer_location_latitude, row.viewer_location_longitude);
+  const b = await sideEndpoint(targetPref, row.location_latitude, row.location_longitude);
   if (!a || !b) return null;
   return geocoderService.haversineKm(a.lat, a.lng, b.lat, b.lng);
 }
 
 /** Browse/switch-city label: premium preferred → GPS nearest-city label — never profile `living_in_city`. */
-function mapBrowseCityLabelFromRow(row) {
+async function mapBrowseCityLabelFromRow(row) {
   const pref = String(row.preferred_location_city || "").trim();
   if (pref) return pref;
   const lat = row.location_latitude;
   const lng = row.location_longitude;
   if (Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) {
-    const gs = geocoderService.getCityAndState(Number(lat), Number(lng));
+    const gs = await geocoderService.getCityAndState(Number(lat), Number(lng));
     const label = gs?.cityStateLabel ? String(gs.cityStateLabel).trim() : "";
     if (label) return label;
   }
@@ -367,7 +367,7 @@ async function getPublicProfile(viewerId, targetUserId, { source = "FEED", consu
     .map((v) => String(v || "").trim())
     .filter(Boolean)
     .join(" at ");
-  const mapCityLine = mapBrowseCityLabelFromRow(user);
+  const mapCityLine = await mapBrowseCityLabelFromRow(user);
   const manualLiving = String(user.living_in_city || "").trim();
   const livesInLabel =
     user.living_in_city_mode === "MANUAL_SWITCH" && manualLiving
@@ -377,7 +377,7 @@ async function getPublicProfile(viewerId, targetUserId, { source = "FEED", consu
   const browseUsingSwitchCity =
     String(user.preferred_location_city || "").trim().length > 0;
 
-  const distanceKmRaw = computeFullProfileDistanceKm(user);
+  const distanceKmRaw = await computeFullProfileDistanceKm(user);
 
   return {
     userId: user.id,
@@ -889,7 +889,7 @@ async function listFriends(viewerId, { sort = "NEARBY" } = {}) {
       name: displayNameForPrivacy(row.name, row.hide_my_name === true),
       age: row.age != null ? Number(row.age) : 0,
       verified: row.verified === true,
-      location: mapBrowseCityLabelFromRow(row),
+      location: await mapBrowseCityLabelFromRow(row),
       distanceKm: row.distance_km != null ? Number(row.distance_km) : null,
       friendsSince: row.friends_since ? new Date(row.friends_since).toISOString() : null,
       primaryPhotoUrl: await normalizePrimaryPhotoUrl(row.primary_photo_url),

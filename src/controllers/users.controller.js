@@ -389,7 +389,7 @@ async function getMe(req, res) {
     const brLat = user.location_latitude;
     const brLng = user.location_longitude;
     if (Number.isFinite(Number(brLat)) && Number.isFinite(Number(brLng))) {
-      const gs = geocoderService.getCityAndState(Number(brLat), Number(brLng));
+      const gs = await geocoderService.getCityAndState(Number(brLat), Number(brLng));
       browseLocationCity = gs?.cityStateLabel ? String(gs.cityStateLabel).trim() : "";
     }
 
@@ -1121,7 +1121,7 @@ async function updateProfileCore(req, res) {
 
     const shouldPersistLocation = locationGranted === true && hasCoordinates;
     const cityState = shouldPersistLocation
-      ? geocoderService.getCityAndState(Number(latitude), Number(longitude))
+      ? await geocoderService.getCityAndState(Number(latitude), Number(longitude))
       : null;
     if (locationGranted === true) {
       debugLog("onboarding_profile_core_location_input", {
@@ -1477,7 +1477,7 @@ async function reverseGeocodeLocation(req, res) {
         message: "Valid latitude and longitude are required",
       });
     }
-    const cityState = geocoderService.getCityAndState(lat, lng);
+    const cityState = await geocoderService.getCityAndState(lat, lng);
     debugLog("profile_reverse_geocode_lookup", {
       userId,
       latitude: lat,
@@ -1502,18 +1502,37 @@ async function reverseGeocodeLocation(req, res) {
 
 async function listIndianCities(req, res) {
   try {
-    const cities = geocoderService.getAllIndianCities();
+    const q = String(req.query.q || "").trim();
+    const page = req.query.page;
+    const pageSize = req.query.pageSize;
+    const country = String(req.query.country || "IN").trim();
+    const selected = String(req.query.selected || "").trim();
+
+    const result = await geocoderService.searchCities({
+      q,
+      page,
+      pageSize,
+      countryIso2: country,
+      selectedLabel: selected,
+    });
+
     return res.status(200).json({
       success: true,
-      message: "Indian cities fetched",
+      message: "Cities fetched",
       data: {
-        cities,
+        cities: result.cities,
+        pagination: {
+          page: result.page,
+          pageSize: result.pageSize,
+          total: result.total,
+          hasMore: result.hasMore,
+        },
       },
     });
   } catch (error) {
     return res.status(500).json({
       success: false,
-      message: "Failed to fetch Indian cities",
+      message: "Failed to fetch cities",
       error: error.message,
     });
   }

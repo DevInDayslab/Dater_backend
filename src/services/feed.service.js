@@ -11,7 +11,7 @@ const { buildRelationshipState } = socialService;
 const { displayNameForPrivacy } = require("../utils/displayName");
 const { normalizeExpiredPauseForUser } = require("./accountLifecycle.service");
 const s3Media = require("./s3Media.service");
-const { resolveIndiaBrowseAnchor, getIndiaBrowseAnchorUnnestArrays } = require("./geocoder.service");
+const { resolveIndiaBrowseAnchor } = require("./geocoder.service");
 const { isNewHereBadgeActive } = require("../utils/newHereBadge");
 
 const FEED_PAGE_SIZE_DEFAULT = 20;
@@ -178,10 +178,9 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
   const distanceKm = resolveFeedDistanceKm(viewer);
   const { ageMin, ageMax } = resolveFeedAgeBounds(viewer);
   const prefCityRaw = String(viewer.preferred_location_city || "").trim();
-  const browseAnchorCoords = prefCityRaw ? resolveIndiaBrowseAnchor(prefCityRaw) : null;
+  const browseAnchorCoords = prefCityRaw ? await resolveIndiaBrowseAnchor(prefCityRaw) : null;
   const browseAnchorLat = browseAnchorCoords != null ? browseAnchorCoords.lat : null;
   const browseAnchorLng = browseAnchorCoords != null ? browseAnchorCoords.lng : null;
-  const anchorArrays = getIndiaBrowseAnchorUnnestArrays();
 
   let feedPoolRes = await query(
     `WITH viewer AS (
@@ -288,8 +287,7 @@ async function getFeed(userId, { page = 1, pageSize = FEED_PAGE_SIZE_DEFAULT, sh
        WHERE u.id = $1::uuid
      ),
      city_anchor AS (
-       SELECT *
-       FROM unnest($9::text[], $10::double precision[], $11::double precision[]) AS ca(label_norm, lat, lng)
+       SELECT label_norm, lat, lng FROM cities
      ),
      candidate_staging AS (
        SELECT c.id,
@@ -796,9 +794,6 @@ ${advMatchEthnicityAnd}
       feedShuffleSeed,
       browseAnchorLat,
       browseAnchorLng,
-      anchorArrays.anchorLabelNorms,
-      anchorArrays.anchorLats,
-      anchorArrays.anchorLngs,
     ]
   );
 

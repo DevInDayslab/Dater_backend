@@ -5,6 +5,9 @@
   "main": "src/index.js",
   "scripts": {
     "migrate": "node src/scripts/migrate.js",
+    "seed:world-cities": "node src/scripts/seedWorldCities.js",
+    "migrate:city-labels": "node src/scripts/migrateStoredCityLabels.js",
+    "verify:world-cities": "node src/scripts/verifyWorldCities.js",
     "test:photo-flow": "node src/scripts/testPhotoUploadFlow.js",
     "benchmark:profile-photo-loads": "node src/scripts/benchmarkProfilePhotoLoads.js",
     "seed:feed:delhi-gurugram-rich": "node src/scripts/seedDelhiGurugramRichMockProfiles.js",

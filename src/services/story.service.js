@@ -10,7 +10,7 @@ const {
   advMatchSmokingAnd,
   advMatchEthnicityAnd,
 } = require("../utils/advancedFilterMatchSql");
-const { resolveIndiaBrowseAnchor, getIndiaBrowseAnchorUnnestArrays } = require("./geocoder.service");
+const { resolveIndiaBrowseAnchor } = require("./geocoder.service");
 
 function normalizedPair(a, b) {
   return a < b ? [a, b] : [b, a];
@@ -819,10 +819,9 @@ async function listStoryReelForViewer(viewerId) {
   const onlyVerified = viewer.only_verified_profiles === true;
   const maxUsers = 60;
   const prefCityRaw = String(viewer.preferred_location_city || "").trim();
-  const browseAnchorCoords = prefCityRaw ? resolveIndiaBrowseAnchor(prefCityRaw) : null;
+  const browseAnchorCoords = prefCityRaw ? await resolveIndiaBrowseAnchor(prefCityRaw) : null;
   const browseAnchorLat = browseAnchorCoords != null ? browseAnchorCoords.lat : null;
   const browseAnchorLng = browseAnchorCoords != null ? browseAnchorCoords.lng : null;
-  const anchorArrays = getIndiaBrowseAnchorUnnestArrays();
 
   const res = await query(
     `WITH viewer AS (
@@ -929,8 +928,7 @@ async function listStoryReelForViewer(viewerId) {
        WHERE u.id = $1::uuid
      ),
      city_anchor AS (
-       SELECT *
-       FROM unnest($8::text[], $9::double precision[], $10::double precision[]) AS ca(label_norm, lat, lng)
+       SELECT label_norm, lat, lng FROM cities
      ),
      eligible_candidate_staging AS (
        SELECT c.id,
@@ -1290,13 +1288,13 @@ ${advMatchEthnicityAnd}
        FROM story_rows
        GROUP BY user_id
        ORDER BY is_self DESC, viewer_has_unseen_story DESC, user_id
-       LIMIT $11::int
+       LIMIT $8::int
      )
      SELECT sr.*
      FROM story_rows sr
      JOIN eligible_owner_ids eo ON eo.user_id = sr.user_id
      ORDER BY sr.user_id, sr.created_at ASC`,
-    [viewerId, distanceKm, ageMin, ageMax, onlyVerified, browseAnchorLat, browseAnchorLng, anchorArrays.anchorLabelNorms, anchorArrays.anchorLats, anchorArrays.anchorLngs, maxUsers]
+    [viewerId, distanceKm, ageMin, ageMax, onlyVerified, browseAnchorLat, browseAnchorLng, maxUsers]
   );
 
   const byUser = new Map();

@@ -1,6 +1,6 @@
 /**
  * Diagnose why viewer can/can't see candidate in feed (both directions).
- * Mirrors browse_anchor_geog logic: switch-city browsing uses india_cities anchor
+ * Mirrors browse_anchor_geog logic: switch-city browsing uses Postgres `cities` anchor
  * for viewer→candidate radius and reciprocal ST_DWithin (not viewer GPS ↔ candidate).
  *
  * Usage (from backend/ with DATABASE_URL in .env):
@@ -132,7 +132,7 @@ async function viewerToCandidatePrimaryGate(client, viewer, candidate, viewerBro
     let travelerBrowseAnchor = null;
     const candPref = String(candidate.preferred_location_city || "").trim();
     if (resolveEffectivePremium(candidate) && candPref) {
-      const ta = resolveIndiaBrowseAnchor(candPref);
+      const ta = await resolveIndiaBrowseAnchor(candPref);
       if (ta) {
         travelerBrowseAnchor = { lat: ta.lat, lng: ta.lng };
         premiumTravelerAnchorPass = await sqlBool(
@@ -249,7 +249,7 @@ async function candidateReciprocalGate(client, viewer, candidate, browseAnchor, 
     let travelerBrowseAnchor = null;
     const candPref = String(candidate.preferred_location_city || "").trim();
     if (resolveEffectivePremium(candidate) && candPref) {
-      const ta = resolveIndiaBrowseAnchor(candPref);
+      const ta = await resolveIndiaBrowseAnchor(candPref);
       if (ta) {
         travelerBrowseAnchor = { lat: ta.lat, lng: ta.lng };
         premiumTravelerAnchorPass = await sqlBool(
@@ -338,7 +338,7 @@ async function diagnoseDirection(client, viewer, candidate) {
   const viewerPremiumEffective = resolveEffectivePremium(viewer);
   const prefRaw = String(viewer.preferred_location_city || "").trim();
   const viewerUsingSwitchCity = Boolean(prefRaw);
-  const browseAnchor = prefRaw ? resolveIndiaBrowseAnchor(prefRaw) : null;
+  const browseAnchor = prefRaw ? await resolveIndiaBrowseAnchor(prefRaw) : null;
 
   const viewerBrowsingKm = resolveViewerBrowsingDistanceKm(viewer);
 
