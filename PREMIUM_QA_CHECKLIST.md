@@ -101,6 +101,7 @@ npm run verify:play-config
 npm run verify:billing-modules
 npm run verify:products-catalog
 npm run verify:premium-billing-flows
+npm run verify:periodic-grants
 pm2 restart dater-api
 ```
 
@@ -127,8 +128,39 @@ pm2 restart dater-api
 |---|---------|---------------|
 | E1 | Profile badge | Shows premium / expiry |
 | E2 | Who viewed you | Unlocked for premium |
-| E3 | Weekly boost | Boost credit granted per plan rules |
-| E4 | `/users/me` entitlements | `premium.status=ACTIVE`, `expiresAt` set |
+| E3 | Weekly boost | Premium user receives +1 boost per subscription week (anchored to Play `startTime`); unused weeks stack |
+| E4 | Daily comments | Premium tops up to 10 / free to 5 once per IST calendar day on app open (`GET /users/me`) |
+| E5 | `/users/me` entitlements | `premium.status=ACTIVE`, `expiresAt` set; `boost.credits` and `comments.credits` reflect lazy grants |
+
+**E3 / E4 — server preflight**
+
+```bash
+npm run verify:periodic-grants
+```
+
+**E3 — weekly boost (manual, replace `USER_ID`)**
+
+```sql
+UPDATE users SET is_premium=true, premium_status='ACTIVE',
+  premium_expires_at=NOW()+interval '30 days',
+  premium_started_at=NOW()-interval '21 days'
+WHERE id='USER_ID';
+UPDATE user_boost_wallet SET remaining_credits=1,
+  last_boost_grant_at=(SELECT premium_started_at FROM users WHERE id='USER_ID')
+WHERE user_id='USER_ID';
+```
+
+Open app → `entitlements.boost.credits` should be **4** (1 existing + 3 missed subscription weeks).
+
+**E4 — daily comments (manual)**
+
+```sql
+UPDATE user_comment_wallet SET remaining_paid_comments=4,
+  last_comment_grant_at=(NOW() AT TIME ZONE 'Asia/Kolkata' - interval '1 day') AT TIME ZONE 'Asia/Kolkata'
+WHERE user_id='USER_ID';
+```
+
+Premium user opens app → comments should top up to **10**; free user to **5**.
 
 ---
 

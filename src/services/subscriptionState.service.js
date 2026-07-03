@@ -154,6 +154,7 @@ async function applySubscriptionStateFromGoogle({
   const autoRenewing = Boolean(lineItem?.autoRenewingPlan?.autoRenewEnabled);
   const resolvedProductId = lineItem?.productId || productId || null;
   const resolvedBasePlanId = lineItem?.offerDetails?.basePlanId || basePlanId || null;
+  const subscriptionStartTime = subscription?.startTime || null;
 
   const metadata = storeBillingLedger.storeMetadata(STORE_PLATFORM.GOOGLE_PLAY, {
     purchaseToken,
@@ -168,10 +169,26 @@ async function applySubscriptionStateFromGoogle({
   metadata.subscriptionAccess = subscriptionStateGrantsAccess(subscriptionState, expiryTime)
     ? "GRANTED"
     : "REVOKED";
+  if (subscriptionStartTime) {
+    metadata.subscriptionStartTime = subscriptionStartTime;
+  }
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+
+    const priorRes = await client.query(
+      `SELECT u.premium_status,
+              ss.metadata->>'subscriptionStartTime' AS prior_subscription_start_time
+       FROM users u
+       LEFT JOIN store_subscriptions ss
+         ON ss.user_id = u.id AND ss.platform = $2
+       WHERE u.id = $1`,
+      [userId, STORE_PLATFORM.GOOGLE_PLAY]
+    );
+    const priorStatus = String(priorRes.rows[0]?.premium_status || "INACTIVE").toUpperCase();
+    const priorAnchor = priorRes.rows[0]?.prior_subscription_start_time || null;
+
     const result = await applyUserPremiumFromState(client, {
       userId,
       subscriptionState,
@@ -198,6 +215,27 @@ async function applySubscriptionStateFromGoogle({
           subscriptionAccess: metadata.subscriptionAccess,
         },
       });
+
+      if (subscriptionStartTime) {
+        const newAnchorMs = new Date(subscriptionStartTime).getTime();
+        const priorAnchorMs = priorAnchor ? new Date(priorAnchor).getTime() : null;
+        const wasLapsed = ["EXPIRED", "INACTIVE"].includes(priorStatus);
+        const anchorChanged =
+          priorAnchorMs != null &&
+          !Number.isNaN(newAnchorMs) &&
+          !Number.isNaN(priorAnchorMs) &&
+          priorAnchorMs !== newAnchorMs;
+
+        if (wasLapsed || anchorChanged) {
+          await client.query(
+            `UPDATE user_boost_wallet
+             SET last_boost_grant_at = NULL,
+                 updated_at = NOW()
+             WHERE user_id = $1`,
+            [userId]
+          );
+        }
+      }
     }
 
     await client.query("COMMIT");

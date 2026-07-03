@@ -4,6 +4,7 @@ const productConfigService = require("./productConfig.service");
 const chatService = require("./chat.service");
 const { hasPremiumAccess } = require("./subscriptionState.service");
 const { clearPrivacyModeOnPremiumLoss } = require("./premiumExclusiveSettings.service");
+const { syncPeriodicGrants } = require("./periodicGrants.service");
 
 function toIsoOrNull(v) {
   return v ? new Date(v).toISOString() : null;
@@ -170,6 +171,7 @@ async function getEntitlementsSnapshot(userId) {
   const client = await pool.connect();
   try {
     const premium = await syncPremiumState(client, userId);
+    await syncPeriodicGrants(client, userId, premium);
     const boost = await getBoostSnapshot(client, userId);
     const comments = await getCommentsSnapshot(client, userId);
     return {
@@ -405,6 +407,8 @@ async function activateBoost({ userId, activateCount }) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const premium = await syncPremiumState(client, userId);
+    await syncPeriodicGrants(client, userId, premium);
     const walletRes = await client.query(
       `SELECT remaining_credits FROM user_boost_wallet WHERE user_id = $1 FOR UPDATE`,
       [userId]
@@ -600,6 +604,8 @@ async function purchaseChatUnlock({ userId, threadId, packCode, transactionId, m
  */
 async function consumePaidCommentsWithClient(client, userId, useCount = 1, reason = "COMMENT_REQUEST") {
   const count = Math.max(1, Number(useCount || 1));
+  const premium = await syncPremiumState(client, userId);
+  await syncPeriodicGrants(client, userId, premium);
   const walletRes = await client.query(
     `SELECT remaining_paid_comments FROM user_comment_wallet WHERE user_id = $1 FOR UPDATE`,
     [userId]
