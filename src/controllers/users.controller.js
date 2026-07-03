@@ -1505,7 +1505,7 @@ async function listIndianCities(req, res) {
     const q = String(req.query.q || "").trim();
     const page = req.query.page;
     const pageSize = req.query.pageSize;
-    const country = String(req.query.country || "IN").trim();
+    const country = String(req.query.country ?? "").trim();
     const selected = String(req.query.selected || "").trim();
 
     const result = await geocoderService.searchCities({

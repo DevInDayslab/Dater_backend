@@ -59,6 +59,13 @@ function resolveCountryIso2(countryIso2) {
   return code || DEFAULT_COUNTRY_ISO2;
 }
 
+/** Empty / ALL / * → no country filter (worldwide city picker). */
+function resolveSearchCountryIso2(countryIso2) {
+  const code = String(countryIso2 ?? "").trim().toUpperCase();
+  if (!code || code === "*" || code === "ALL") return null;
+  return code;
+}
+
 function phoneCountryCodeToIso2(phoneCountryCode) {
   const code = String(phoneCountryCode || "").trim();
   if (code === "+91" || code === "91") return "IN";
@@ -114,10 +121,10 @@ async function searchCities({
   q = "",
   page = 1,
   pageSize = DEFAULT_PAGE_SIZE,
-  countryIso2 = DEFAULT_COUNTRY_ISO2,
+  countryIso2 = "",
   selectedLabel = "",
 } = {}) {
-  const iso2 = resolveCountryIso2(countryIso2);
+  const iso2 = resolveSearchCountryIso2(countryIso2);
   const searchTerm = String(q || "").trim();
   const safePage = Math.max(1, Number.parseInt(String(page), 10) || 1);
   const safePageSize = Math.min(
@@ -129,35 +136,62 @@ async function searchCities({
   const ilikePattern = searchTerm ? `%${searchTerm}%` : null;
   const prefixPattern = searchTerm ? `${searchTerm}%` : null;
 
-  const whereClause = searchTerm
-    ? `iso2 = $1 AND (label_norm ILIKE $2 OR city_ascii ILIKE $2 OR city ILIKE $2)`
-    : `iso2 = $1`;
+  const whereParts = [];
+  const params = [];
+  if (iso2) {
+    params.push(iso2);
+    whereParts.push(`iso2 = $${params.length}`);
+  }
+  if (searchTerm) {
+    params.push(ilikePattern);
+    const p = `$${params.length}`;
+    whereParts.push(`(label_norm ILIKE ${p} OR city_ascii ILIKE ${p} OR city ILIKE ${p})`);
+  }
+  const whereClause = whereParts.length > 0 ? whereParts.join(" AND ") : "TRUE";
 
-  const countParams = searchTerm ? [iso2, ilikePattern] : [iso2];
-  const countRes = await query(`SELECT COUNT(*)::int AS total FROM cities WHERE ${whereClause}`, countParams);
+  const countRes = await query(`SELECT COUNT(*)::int AS total FROM cities WHERE ${whereClause}`, params);
   const total = countRes.rows[0]?.total ?? 0;
 
-  const listParams = searchTerm
-    ? [iso2, ilikePattern, selectedNorm, prefixPattern, safePageSize, offset]
-    : [iso2, selectedNorm, safePageSize, offset];
-
-  const listSql = searchTerm
-    ? `SELECT id, city, city_ascii, admin_name, state_code, label, country, iso2, population, lat, lng
+  const listParams = [...params];
+  if (searchTerm) {
+    listParams.push(selectedNorm, prefixPattern, safePageSize, offset);
+    const selectedIdx = listParams.length - 3;
+    const prefixIdx = listParams.length - 2;
+    const limitIdx = listParams.length - 1;
+    const offsetIdx = listParams.length;
+    const listSql = `SELECT id, city, city_ascii, admin_name, state_code, label, country, iso2, population, lat, lng
        FROM cities
-       WHERE iso2 = $1 AND (label_norm ILIKE $2 OR city_ascii ILIKE $2 OR city ILIKE $2)
+       WHERE ${whereClause}
        ORDER BY
-         CASE WHEN label_norm = $3 THEN 0 ELSE 1 END,
-         CASE WHEN label_norm LIKE $4 OR city_ascii LIKE $4 OR city LIKE $4 THEN 0 ELSE 1 END,
-         label_norm ASC
-       LIMIT $5 OFFSET $6`
-    : `SELECT id, city, city_ascii, admin_name, state_code, label, country, iso2, population, lat, lng
-       FROM cities
-       WHERE iso2 = $1
-       ORDER BY
-         CASE WHEN label_norm = $2 THEN 0 ELSE 1 END,
-         label_norm ASC
-       LIMIT $3 OFFSET $4`;
+         CASE WHEN label_norm = $${selectedIdx} THEN 0 ELSE 1 END,
+         CASE WHEN label_norm LIKE $${prefixIdx} OR city_ascii LIKE $${prefixIdx} OR city LIKE $${prefixIdx} THEN 0 ELSE 1 END,
+         ${iso2 ? "label_norm ASC" : "COALESCE(population, 0) DESC, label_norm ASC"}
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
+    const listRes = await query(listSql, listParams);
+    const cities = listRes.rows.map(mapCityRow);
+    return {
+      cities,
+      page: safePage,
+      pageSize: safePageSize,
+      total,
+      hasMore: offset + cities.length < total,
+    };
+  }
 
+  listParams.push(selectedNorm, safePageSize, offset);
+  const selectedIdx = listParams.length - 2;
+  const limitIdx = listParams.length - 1;
+  const offsetIdx = listParams.length;
+  const emptyBrowseOrder = iso2
+    ? "label_norm ASC"
+    : "COALESCE(population, 0) DESC, label_norm ASC";
+  const listSql = `SELECT id, city, city_ascii, admin_name, state_code, label, country, iso2, population, lat, lng
+       FROM cities
+       WHERE ${whereClause}
+       ORDER BY
+         CASE WHEN label_norm = $${selectedIdx} THEN 0 ELSE 1 END,
+         ${emptyBrowseOrder}
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
   const listRes = await query(listSql, listParams);
   const cities = listRes.rows.map(mapCityRow);
 

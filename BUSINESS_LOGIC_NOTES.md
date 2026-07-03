@@ -109,7 +109,7 @@ This file captures the finalized business rules and schema intent so Node.js imp
 - `home_town_city` — profile-only; never written by GPS or geocoder.
 - `living_in_city` — profile-only **manual** label when the user saves it (typically `living_in_city_mode === MANUAL_SWITCH`). GPS pings **do not** write or overwrite this column (`PATCH profile-core`).
 - `living_in_city_mode` — `FOLLOW_DEVICE` means “not pinning a manual profile city”; `MANUAL_SWITCH` means the user chose a city for the profile bubble.
-- Browse / feed / map **labels** use `user_filters.preferred_location_city` when set (premium switch city), otherwise reverse-geocode from stored `users.location` via the Postgres `cities` table (`geocoder.service.js`, country-scoped default `IN`). GET `/me` exposes this as `browseLocationCity` so clients never confuse profile text with GPS.
+- City picker (`GET /me/cities`) searches the full Postgres `cities` table worldwide by default; pass `country=IN` (or another ISO2) to scope browse/search. GPS reverse-geocode remains country-scoped (default `IN`).
 - City picker: `GET /api/v1/users/me/cities?q=&page=&pageSize=&country=&selected=` — search + paginated; full list is never dumped. Data source: `cities` table seeded from `backend/src/data/Cities_world_coordinates.csv`.
 
 ### Profile Multi-Select Tables

@@ -157,6 +157,27 @@ async function auditAsciiLabels() {
   }
 }
 
+async function auditGlobalCityPicker() {
+  const result = await searchCities({ q: "london", page: 1, pageSize: 10 });
+  const labels = result.cities.map((c) => c.cityStateLabel);
+  if (!labels.some((l) => l.toLowerCase().includes("london"))) {
+    fail("global search london", JSON.stringify(labels));
+  }
+  if (!result.cities.some((c) => c.iso2 && c.iso2 !== "IN")) {
+    fail("global search returns non-IN cities", JSON.stringify(result.cities.map((c) => c.iso2)));
+  }
+  ok(`global search london → ${labels.slice(0, 3).join(", ")}`);
+
+  const browse = await searchCities({ q: "", page: 1, pageSize: 20 });
+  if (browse.total < 10000) {
+    fail("global browse total cities", `total=${browse.total}`);
+  }
+  if (!browse.cities.some((c) => c.iso2 && c.iso2 !== "IN")) {
+    fail("global browse includes international cities");
+  }
+  ok(`global browse returns ${browse.cities.length} cities (total=${browse.total})`);
+}
+
 async function auditPagination() {
   const p1 = await searchCities({ q: "", page: 1, pageSize: 10, countryIso2: "IN" });
   const p2 = await searchCities({ q: "", page: 2, pageSize: 10, countryIso2: "IN" });
@@ -176,6 +197,7 @@ async function main() {
   await auditGeocoder();
   await auditAnchors();
   await auditAsciiLabels();
+  await auditGlobalCityPicker();
   await auditPagination();
   console.log("\nAll world cities audits passed.");
 }
