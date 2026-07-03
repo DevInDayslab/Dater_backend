@@ -84,8 +84,8 @@ function normalizeCityAsciiKey(value) {
 }
 
 function buildIndiaCityLabel(city, rawAdminName, cityAscii = "") {
-  const cityName = String(city || "").trim();
-  const asciiKey = normalizeCityAsciiKey(cityAscii || cityName);
+  const displayCity = String(cityAscii || city || "").trim();
+  const asciiKey = normalizeCityAsciiKey(displayCity);
   const override = INDIAN_CITY_OVERRIDES[asciiKey];
   const stateCode =
     stateCodeForIndianAdmin(rawAdminName) || override?.stateCode || "";
@@ -93,24 +93,24 @@ function buildIndiaCityLabel(city, rawAdminName, cityAscii = "") {
     normalizeAdminName(rawAdminName) || override?.adminName || "";
 
   if (cleanAdmin === "Delhi") {
-    if (cityName === "New Delhi") return "New Delhi, DL";
-    if (cityName === "Delhi") return "Delhi, DL";
-    return stateCode ? `${cityName}, ${stateCode}` : `${cityName}, IN`;
+    if (displayCity === "New Delhi") return "New Delhi, DL";
+    if (displayCity === "Delhi") return "Delhi, DL";
+    return stateCode ? `${displayCity}, ${stateCode}` : `${displayCity}, IN`;
   }
 
-  if (stateCode) return `${cityName}, ${stateCode}`;
-  return `${cityName}, IN`;
+  if (stateCode) return `${displayCity}, ${stateCode}`;
+  return `${displayCity}, IN`;
 }
 
 function buildCityLabel(row) {
   const iso2 = String(row.iso2 || "").trim().toUpperCase();
-  const city = String(row.city || "").trim();
-  if (!city || !iso2) return "";
+  const displayCity = String(row.city_ascii || row.city || "").trim();
+  if (!displayCity || !iso2) return "";
 
   if (iso2 === "IN") {
-    return buildIndiaCityLabel(city, row.admin_name, row.city_ascii || city);
+    return buildIndiaCityLabel(displayCity, row.admin_name, displayCity);
   }
-  return `${city}, ${iso2}`;
+  return `${displayCity}, ${iso2}`;
 }
 
 const DEFAULT_CITY_LABEL_ALIASES = [

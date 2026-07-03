@@ -118,7 +118,7 @@ async function searchCities({
 
   const listParams = searchTerm
     ? [iso2, ilikePattern, selectedNorm, prefixPattern, safePageSize, offset]
-    : [iso2, selectedNorm, prefixPattern || "%", safePageSize, offset];
+    : [iso2, selectedNorm, safePageSize, offset];
 
   const listSql = searchTerm
     ? `SELECT id, city, city_ascii, admin_name, state_code, label, country, iso2, population, lat, lng

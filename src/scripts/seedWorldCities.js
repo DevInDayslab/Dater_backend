@@ -23,17 +23,17 @@ function generateCityData(row) {
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
 
   const iso2 = String(row.iso2 || "").trim().toUpperCase();
-  const city = String(row.city || "").trim();
-  const cityAscii = String(row.city_ascii || city).trim();
+  const displayCity = String(row.city_ascii || row.city || "").trim();
+  const cityAscii = displayCity;
   const id = Number.parseInt(String(row.id || "").trim(), 10);
-  if (!city || !iso2 || !Number.isFinite(id)) return null;
+  if (!displayCity || !iso2 || !Number.isFinite(id)) return null;
 
   const label = buildCityLabel(row);
   if (!label) return null;
 
   const stateCode = iso2 === "IN"
     ? stateCodeForIndianAdmin(row.admin_name) ||
-      INDIAN_CITY_OVERRIDES[normalizeCityAsciiKey(row.city_ascii || city)]?.stateCode ||
+      INDIAN_CITY_OVERRIDES[normalizeCityAsciiKey(displayCity)]?.stateCode ||
       ""
     : null;
   const populationRaw = String(row.population || "").trim();
@@ -41,7 +41,7 @@ function generateCityData(row) {
 
   return {
     id,
-    city,
+    city: displayCity,
     city_ascii: cityAscii,
     lat,
     lng,
