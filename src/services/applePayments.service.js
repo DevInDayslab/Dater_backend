@@ -60,14 +60,19 @@ async function recordStorePurchaseVerification({
   userPurchaseId,
   metadata,
 }) {
+  // Compute consumed_at in JS — avoids PG 42P18 when the same $n is used as enum + text compare.
+  const purchaseTypeText = String(purchaseType || "INAPP");
+  const consumedAtIso = purchaseTypeText === "INAPP" ? new Date().toISOString() : null;
+
   await pool.query(
     `INSERT INTO store_purchase_verifications (
        user_id, platform, store_order_id, purchase_token, store_product_id, pack_code,
        purchase_type, store_state, user_purchase_id, metadata, acknowledged_at, consumed_at, updated_at
      ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb,
+       $1::uuid, $2::text, $3::text, $4::text, $5::text, $6::text,
+       $7::text, $8::text, $9::uuid, $10::jsonb,
        NOW(),
-       CASE WHEN $7::text = 'INAPP' THEN NOW() ELSE NULL END,
+       $11::timestamptz,
        NOW()
      )
      ON CONFLICT (platform, store_order_id) DO UPDATE SET
@@ -81,10 +86,11 @@ async function recordStorePurchaseVerification({
       purchaseToken,
       storeProductId,
       packCode,
-      purchaseType,
-      storeState,
+      purchaseTypeText,
+      String(storeState || "PURCHASED"),
       userPurchaseId || null,
       JSON.stringify(metadata || {}),
+      consumedAtIso,
     ]
   );
 }

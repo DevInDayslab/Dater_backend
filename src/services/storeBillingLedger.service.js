@@ -46,7 +46,7 @@ async function upsertStoreSubscription(client, {
     `INSERT INTO store_subscriptions (
        user_id, platform, store_product_id, purchase_token, latest_order_id,
        expiry_time, auto_renewing, store_state, metadata, updated_at
-     ) VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8, $9::jsonb, NOW())
+     ) VALUES ($1::uuid, $2::text, $3::text, $4::text, $5::text, $6::timestamptz, $7::boolean, $8::text, $9::jsonb, NOW())
      ON CONFLICT (user_id, platform) DO UPDATE SET
        store_product_id = EXCLUDED.store_product_id,
        purchase_token = EXCLUDED.purchase_token,
@@ -63,7 +63,7 @@ async function upsertStoreSubscription(client, {
       purchaseToken,
       storeOrderId,
       expiryTime,
-      autoRenewing,
+      Boolean(autoRenewing),
       storeState,
       JSON.stringify(metadata || {}),
     ]
