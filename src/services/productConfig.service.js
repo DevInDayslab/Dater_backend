@@ -142,20 +142,20 @@ async function getProductByAppleProductId(appleProductId) {
 }
 
 function toAppleCatalogItem(product) {
+  // Structural metadata only — iOS takes localized prices + subscription periods from StoreKit.
+  // Never expose DB price_paise / priceLabel / buttonLabel (currency-specific) on this route.
+  // Android continues to use GET /api/v1/config/products unchanged.
   return {
     packCode: product.packCode,
     category: product.category,
     quantity: product.quantity,
     durationDays: product.durationDays,
     planCode: product.planCode,
-    displayTitle: product.displayTitle,
-    displayLabel: product.displayLabel,
     badgeType: product.badgeType,
     badgeText: product.badgeText,
     isDefault: product.isDefault,
     sortOrder: product.sortOrder,
     appleProductId: product.appleProductId,
-    buttonLabel: product.buttonLabel,
   };
 }
 
