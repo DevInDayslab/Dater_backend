@@ -7,6 +7,9 @@ const router = express.Router();
 // Public — mirrors GET /api/v1/config/products for iOS StoreKit IDs only.
 router.get("/apple-catalog", applePaymentsController.getAppleCatalog);
 
+// App Store Server Notifications V2 (no JWT — Apple posts directly).
+router.post("/apple-webhook", applePaymentsController.appleWebhook);
+
 // Authenticated Apple StoreKit 2 verification (Android uses /billing/verify-purchase).
 router.post("/verify-apple-purchase", requireAuth, applePaymentsController.verifyApplePurchase);
 

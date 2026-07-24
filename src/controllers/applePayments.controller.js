@@ -87,8 +87,45 @@ async function redeemChatUnlockCredit(req, res) {
   }
 }
 
+/**
+ * App Store Server Notifications V2.
+ * Always 200 after accept so Apple does not retry endlessly.
+ */
+async function appleWebhook(req, res) {
+  try {
+    const signedPayload = req.body?.signedPayload;
+    if (!signedPayload) {
+      return res.status(200).json({ success: true, ignored: true, reason: "missing_signedPayload" });
+    }
+    const result = await applePaymentsService.handleAppleWebhook({ signedPayload });
+    return res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    debugLogSafe(error);
+    // Still 200 for malformed/verify failures after logging — Apple will stop if we 5xx forever,
+    // but transient decoder misconfig should be visible in logs.
+    return res.status(200).json({
+      success: false,
+      code: error?.code || "APPLE_WEBHOOK_ERROR",
+      message: error.message || "Apple webhook processing failed",
+    });
+  }
+}
+
+function debugLogSafe(error) {
+  try {
+    const { debugLog } = require("../utils/serverDebugLog");
+    debugLog("apple_webhook_handler_error", {
+      code: error?.code,
+      message: error?.message,
+    });
+  } catch {
+    // ignore
+  }
+}
+
 module.exports = {
   getAppleCatalog,
   verifyApplePurchase,
   redeemChatUnlockCredit,
+  appleWebhook,
 };
