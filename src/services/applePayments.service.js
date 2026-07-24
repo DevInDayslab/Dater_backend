@@ -67,7 +67,7 @@ async function recordStorePurchaseVerification({
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb,
        NOW(),
-       CASE WHEN $7 = 'INAPP' THEN NOW() ELSE NULL END,
+       CASE WHEN $7::text = 'INAPP' THEN NOW() ELSE NULL END,
        NOW()
      )
      ON CONFLICT (platform, store_order_id) DO UPDATE SET
@@ -422,6 +422,43 @@ async function verifyApplePurchase({ userId, jwsToken, threadId }) {
     throw err;
   }
 
+  // Credits may already be in user_purchases if a prior verify granted then failed on ledger insert.
+  const priorPurchase = await pool.query(
+    `SELECT id FROM user_purchases WHERE transaction_id = $1 LIMIT 1`,
+    [transactionId]
+  );
+  if (priorPurchase.rows[0]) {
+    try {
+      await recordStorePurchaseVerification({
+        userId,
+        storeOrderId: transactionId,
+        purchaseToken: transactionId,
+        storeProductId: productId,
+        packCode: product.packCode,
+        purchaseType: product.category === "PREMIUM" ? "SUBSCRIPTION" : "INAPP",
+        storeState: String(decoded.type || "PURCHASED"),
+        userPurchaseId: priorPurchase.rows[0].id,
+        metadata: {
+          source: "APP_STORE",
+          appleProductId: productId,
+          transactionId,
+          originalTransactionId,
+          type: decoded.type || null,
+          environment: decoded.environment || null,
+          threadId: String(threadId || "").trim() || null,
+          repairedLedger: true,
+        },
+      });
+    } catch (recordErr) {
+      debugLog("apple_record_verification_repair_failed", {
+        userId,
+        transactionId,
+        message: recordErr.message,
+      });
+    }
+    return entitlementsService.getEntitlementsSnapshot(userId);
+  }
+
   const metadata = {
     source: "APP_STORE",
     appleProductId: productId,
@@ -490,20 +527,30 @@ async function verifyApplePurchase({ userId, jwsToken, threadId }) {
     throw err;
   }
 
-  await recordStorePurchaseVerification({
-    userId,
-    storeOrderId: transactionId,
-    // Unique per transaction for renewals; originalTransactionId lives in metadata + store_subscriptions.
-    purchaseToken: transactionId,
-    storeProductId: productId,
-    packCode: product.packCode,
-    purchaseType,
-    storeState: String(decoded.type || "PURCHASED"),
-    metadata: {
-      ...metadata,
-      threadId: String(threadId || "").trim() || null,
-    },
-  });
+  try {
+    await recordStorePurchaseVerification({
+      userId,
+      storeOrderId: transactionId,
+      // Unique per transaction for renewals; originalTransactionId lives in metadata + store_subscriptions.
+      purchaseToken: transactionId,
+      storeProductId: productId,
+      packCode: product.packCode,
+      purchaseType,
+      storeState: String(decoded.type || "PURCHASED"),
+      metadata: {
+        ...metadata,
+        threadId: String(threadId || "").trim() || null,
+      },
+    });
+  } catch (recordErr) {
+    // Entitlements already granted above — do not fail the client purchase UI / leave StoreKit unfinished.
+    debugLog("apple_record_verification_failed", {
+      userId,
+      productId,
+      transactionId,
+      message: recordErr.message,
+    });
+  }
 
   debugLog("apple_purchase_verified", {
     userId,
