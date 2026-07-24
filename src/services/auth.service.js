@@ -266,6 +266,34 @@ async function getOrCreateUserByPhone(phoneE164, { ipAddress, deviceId, userAgen
   const consentTimestamp = consentAcceptedAt ? new Date(consentAcceptedAt) : null;
   const hasValidConsentTs = consentTimestamp && !Number.isNaN(consentTimestamp.getTime());
 
+  const existingRes = await query(
+    `SELECT id, account_state
+     FROM users
+     WHERE phone_e164 = $1
+     LIMIT 1`,
+    [phoneE164]
+  );
+  const existing = existingRes.rows[0];
+  if (existing && String(existing.account_state) === "DELETED") {
+    const reactivated = await query(
+      `UPDATE users
+         SET is_phone_verified = TRUE,
+             last_active_at = NOW(),
+             account_state = 'ACTIVE'::account_state_enum,
+             onboarding_step = 'onboarding_name',
+             onboarding_completed_at = NULL,
+             onboarding_updated_at = NOW(),
+             terms_accepted_at = COALESCE(terms_accepted_at, $2),
+             privacy_accepted_at = COALESCE(privacy_accepted_at, $2),
+             consent_source = COALESCE(consent_source, $3),
+             updated_at = NOW()
+       WHERE phone_e164 = $1
+       RETURNING id, phone_e164, onboarding_completed_at, onboarding_step, onboarding_updated_at, account_state, underage_until`,
+      [phoneE164, hasValidConsentTs ? consentTimestamp.toISOString() : null, consentSource || null]
+    );
+    return { user: reactivated.rows[0], isNewUser: true };
+  }
+
   const updatedExisting = await query(
     `UPDATE users
        SET is_phone_verified = TRUE,

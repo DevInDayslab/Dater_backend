@@ -133,13 +133,52 @@ async function getProductByGooglePlayProductId(googlePlayProductId, { basePlanId
   return matches[0];
 }
 
+async function getProductByAppleProductId(appleProductId) {
+  const normalized = String(appleProductId || "").trim();
+  if (!normalized) return null;
+  const catalog = await getActiveCatalog();
+  const all = [...catalog.premium, ...catalog.boost, ...catalog.comments, ...catalog.chat];
+  return all.find((p) => p.appleProductId === normalized) || null;
+}
+
+function toAppleCatalogItem(product) {
+  return {
+    packCode: product.packCode,
+    category: product.category,
+    quantity: product.quantity,
+    durationDays: product.durationDays,
+    planCode: product.planCode,
+    displayTitle: product.displayTitle,
+    displayLabel: product.displayLabel,
+    badgeType: product.badgeType,
+    badgeText: product.badgeText,
+    isDefault: product.isDefault,
+    sortOrder: product.sortOrder,
+    appleProductId: product.appleProductId,
+    buttonLabel: product.buttonLabel,
+  };
+}
+
+async function getAppleCatalogPayload() {
+  const catalog = await getActiveCatalog();
+  const mapItems = (items) => items.filter((p) => p.appleProductId).map(toAppleCatalogItem);
+  return {
+    premium: mapItems(catalog.premium),
+    boost: mapItems(catalog.boost),
+    comments: mapItems(catalog.comments),
+    chat: mapItems(catalog.chat),
+  };
+}
+
 module.exports = {
   getActiveCatalog,
   getPublicProductsPayload,
+  getAppleCatalogPayload,
   getProductByPackCode,
   getProductByPlanCode,
   getProductByPackSize,
   getProductByGooglePlayProductId,
+  getProductByAppleProductId,
   loadAllProducts,
   clearCatalogCache,
 };

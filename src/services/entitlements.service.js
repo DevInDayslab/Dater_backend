@@ -167,6 +167,16 @@ async function getCommentsSnapshot(client, userId) {
   };
 }
 
+async function getChatUnlockWalletSnapshot(client, userId) {
+  const res = await client.query(
+    `SELECT remaining_credits FROM user_chat_unlock_wallet WHERE user_id = $1 LIMIT 1`,
+    [userId]
+  );
+  return {
+    credits: Number(res.rows[0]?.remaining_credits || 0),
+  };
+}
+
 async function getEntitlementsSnapshot(userId) {
   const client = await pool.connect();
   try {
@@ -174,6 +184,7 @@ async function getEntitlementsSnapshot(userId) {
     await syncPeriodicGrants(client, userId, premium);
     const boost = await getBoostSnapshot(client, userId);
     const comments = await getCommentsSnapshot(client, userId);
+    const chatUnlock = await getChatUnlockWalletSnapshot(client, userId);
     return {
       premium: {
         isActive: hasPremiumAccess(premium),
@@ -184,10 +195,151 @@ async function getEntitlementsSnapshot(userId) {
       },
       boost,
       comments,
+      // Additive field for iOS orphaned chat-unlock recovery; Android ignores unknown keys.
+      chatUnlock,
     };
   } finally {
     client.release();
   }
+}
+
+/**
+ * Credit a pending chat unlock when Apple verify arrives without threadId
+ * (e.g. Transaction.updates after force-quit). Does not unlock any thread yet.
+ */
+async function creditPendingChatUnlock({ userId, packCode, transactionId, metadata = {} }) {
+  const product = await resolvePackProduct("CHAT", { packCode: packCode || "CHAT_UNLOCK_SINGLE" });
+  if (!product) {
+    const err = new Error("Invalid chat unlock pack");
+    err.code = "INVALID_CHAT_UNLOCK_PACK";
+    throw err;
+  }
+  const amountRupees = Number(product.pricePaise) / 100;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `INSERT INTO user_chat_unlock_wallet (user_id, remaining_credits, updated_at)
+       VALUES ($1, 1, NOW())
+       ON CONFLICT (user_id)
+       DO UPDATE SET remaining_credits = user_chat_unlock_wallet.remaining_credits + 1,
+                     updated_at = NOW()`,
+      [userId]
+    );
+    await insertPurchase(client, {
+      userId,
+      itemType: "UNLOCK_CHAT",
+      packCode: product.packCode,
+      amountRupees,
+      quantity: 1,
+      transactionId,
+      metadata: {
+        pendingThreadUnlock: true,
+        packCode: product.packCode,
+        source: "APP_STORE",
+        ...(metadata || {}),
+      },
+    });
+    await client.query("COMMIT");
+    debugLog("entitlement_chat_unlock_credit_pending", { userId, packCode: product.packCode });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+  return getEntitlementsSnapshot(userId);
+}
+
+/**
+ * Consume one pending chat-unlock credit and unlock the given thread.
+ */
+async function redeemPendingChatUnlock({ userId, threadId }) {
+  const normalizedThreadId = String(threadId || "").trim();
+  if (!normalizedThreadId) {
+    const err = new Error("threadId is required");
+    err.code = "INVALID_INPUT";
+    throw err;
+  }
+
+  const isParticipant = await chatService.ensureParticipant(normalizedThreadId, userId);
+  if (!isParticipant) {
+    const err = new Error("Thread not found");
+    err.code = "THREAD_NOT_FOUND";
+    throw err;
+  }
+  const peer = await chatService.getThreadPeer(normalizedThreadId, userId);
+  if (!peer) {
+    const err = new Error("Thread peer not found");
+    err.code = "THREAD_PEER_NOT_FOUND";
+    throw err;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const walletRes = await client.query(
+      `SELECT remaining_credits FROM user_chat_unlock_wallet WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+    const credits = Number(walletRes.rows[0]?.remaining_credits || 0);
+    if (credits < 1) {
+      const err = new Error("No pending chat unlock credits");
+      err.code = "INSUFFICIENT_CHAT_UNLOCK_CREDITS";
+      throw err;
+    }
+
+    const restrictionRes = await client.query(
+      `SELECT is_unlocked, is_locally_unlocked
+       FROM chat_restrictions
+       WHERE user_id = $1 AND target_id = $2
+       FOR UPDATE`,
+      [userId, peer.id]
+    );
+    const restriction = restrictionRes.rows[0];
+    if (restriction?.is_unlocked === true || restriction?.is_locally_unlocked === true) {
+      const err = new Error("Chat is already unlocked");
+      err.code = "CHAT_ALREADY_UNLOCKED";
+      throw err;
+    }
+
+    await client.query(
+      `UPDATE user_chat_unlock_wallet
+       SET remaining_credits = remaining_credits - 1,
+           updated_at = NOW()
+       WHERE user_id = $1`,
+      [userId]
+    );
+    await client.query(
+      `INSERT INTO chat_restrictions (user_id, target_id, is_unlocked, updated_at)
+       VALUES ($1, $2, TRUE, NOW())
+       ON CONFLICT (user_id, target_id)
+       DO UPDATE SET is_unlocked = TRUE, updated_at = NOW()`,
+      [userId, peer.id]
+    );
+    await client.query(
+      `INSERT INTO chat_unlock_events (user_id, target_id, purchase_id)
+       VALUES ($1, $2, NULL)`,
+      [userId, peer.id]
+    );
+    await client.query("COMMIT");
+    debugLog("entitlement_chat_unlock_redeemed", {
+      userId,
+      threadId: normalizedThreadId,
+      targetUserId: peer.id,
+    });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+
+  return {
+    success: true,
+    threadId: normalizedThreadId,
+    entitlements: await getEntitlementsSnapshot(userId),
+  };
 }
 
 async function grantPremiumFromStore({
@@ -658,6 +810,8 @@ module.exports = {
   activateBoost,
   purchaseComments,
   purchaseChatUnlock,
+  creditPendingChatUnlock,
+  redeemPendingChatUnlock,
   consumePaidComments,
   consumePaidCommentsWithClient,
   syncPremiumState,
