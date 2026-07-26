@@ -28,12 +28,21 @@ function normalizePhone(phoneNumber) {
   return String(phoneNumber || "").replace(/[^\d]/g, "");
 }
 
+function normalizeIndianMobile(phoneNumber) {
+  const digits = normalizePhone(phoneNumber);
+  if (!digits) return "";
+  if (digits.length === 10) return `91${digits}`;
+  if (digits.length === 12 && digits.startsWith("91")) return digits;
+  if (digits.length === 11 && digits.startsWith("0")) return `91${digits.slice(1)}`;
+  return digits;
+}
+
 async function sendOTP(phoneNumber) {
   if (!MSG91_AUTH_KEY) {
     throw new Error("MSG91_AUTH_KEY is required in environment variables");
   }
 
-  const mobile = normalizePhone(phoneNumber);
+  const mobile = normalizeIndianMobile(phoneNumber);
   if (!mobile) {
     throw new Error("A valid phone number is required");
   }
@@ -69,7 +78,7 @@ async function resendOTP(phoneNumber) {
     throw new Error("MSG91_AUTH_KEY is required in environment variables");
   }
 
-  const mobile = normalizePhone(phoneNumber);
+  const mobile = normalizeIndianMobile(phoneNumber);
   if (!mobile) {
     throw new Error("A valid phone number is required");
   }
@@ -99,7 +108,7 @@ async function verifyOTP(phoneNumber, otp) {
     throw new Error("MSG91_AUTH_KEY is required in environment variables");
   }
 
-  const mobile = normalizePhone(phoneNumber);
+  const mobile = normalizeIndianMobile(phoneNumber);
   const normalizedOtp = String(otp || "").trim();
 
   if (!mobile || normalizedOtp.length !== 6) {
