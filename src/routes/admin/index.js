@@ -8,6 +8,7 @@ const broadcastRoutes = require("./broadcast.routes");
 const revenueRoutes = require("./revenue.routes");
 const productsRoutes = require("./products.routes");
 const appConfigRoutes = require("./appConfig.routes");
+const formsRoutes = require("./forms.routes");
 
 const router = express.Router();
 
@@ -22,5 +23,6 @@ router.use("/broadcast", broadcastRoutes);
 router.use("/revenue", revenueRoutes);
 router.use("/products", productsRoutes);
 router.use("/app-config", appConfigRoutes);
+router.use("/forms", formsRoutes);
 
 module.exports = router;
