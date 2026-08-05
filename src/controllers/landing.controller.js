@@ -71,7 +71,10 @@ function handleError(res, error, fallbackMessage) {
 
 async function presignAttachment(req, res) {
   try {
-    const data = await landingContactService.presignAttachment(req.body?.contentType);
+    const data = await landingContactService.presignAttachment(
+      req.body?.contentType,
+      req.body?.fileName
+    );
     return res.status(200).json({
       success: true,
       message: "Attachment upload URL generated",

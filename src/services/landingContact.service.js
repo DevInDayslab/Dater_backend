@@ -18,10 +18,30 @@ const CONTENT_TYPE_TO_EXT = {
   "application/pdf": "pdf",
 };
 
+const EXTENSION_TO_CONTENT_TYPE = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+  pdf: "application/pdf",
+};
+
 const LANDING_CONTACT_KEY_PREFIX = "landing/contacts/";
 
-function assertAllowedAttachmentContentType(contentType) {
-  const normalized = String(contentType || "").trim().toLowerCase();
+function inferContentTypeFromFileName(fileName) {
+  const extension = String(fileName || "")
+    .split(".")
+    .pop()
+    ?.toLowerCase();
+  return EXTENSION_TO_CONTENT_TYPE[extension] || null;
+}
+
+function assertAllowedAttachmentContentType(contentType, fileName) {
+  let normalized = String(contentType || "").trim().toLowerCase();
+  if (!normalized || normalized === "application/octet-stream") {
+    normalized = inferContentTypeFromFileName(fileName) || "";
+  }
   if (!ALLOWED_ATTACHMENT_CONTENT_TYPES.has(normalized)) {
     const err = new Error(
       "contentType must be image/jpeg, image/png, image/webp, image/gif, or application/pdf"
@@ -47,8 +67,8 @@ function assertValidLandingContactS3Key(s3Key) {
   return normalized;
 }
 
-async function presignAttachment(contentType) {
-  const normalizedContentType = assertAllowedAttachmentContentType(contentType);
+async function presignAttachment(contentType, fileName) {
+  const normalizedContentType = assertAllowedAttachmentContentType(contentType, fileName);
   const contactId = crypto.randomUUID();
   const ext = CONTENT_TYPE_TO_EXT[normalizedContentType];
   const key = s3Media.buildLandingContactObjectKey(contactId, ext);
