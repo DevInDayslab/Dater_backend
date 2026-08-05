@@ -35,6 +35,11 @@ function buildPlatformSplashObjectKey() {
   return "platform/splash-background.webp";
 }
 
+function buildLandingContactObjectKey(contactId, ext) {
+  const safeExt = String(ext || "bin").replace(/[^a-z0-9]/gi, "").toLowerCase() || "bin";
+  return `landing/contacts/${contactId}.${safeExt}`;
+}
+
 function newPhotoId() {
   return crypto.randomUUID();
 }
@@ -130,6 +135,7 @@ module.exports = {
   buildUserPhotoObjectKey,
   buildStoryObjectKey,
   buildPlatformSplashObjectKey,
+  buildLandingContactObjectKey,
   newPhotoId,
   getPresignedPutUrl,
   getPresignedGetUrl,

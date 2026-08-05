@@ -187,7 +187,7 @@ async function sendEventDataNotification({
   }
 
   const tokenRes = await query(
-    `SELECT token
+    `SELECT token, platform
      FROM user_push_tokens
      WHERE user_id = $1
        AND is_active = TRUE
@@ -195,9 +195,37 @@ async function sendEventDataNotification({
      LIMIT 20`,
     [recipientUserId]
   );
-  const tokens = tokenRes.rows.map((r) => String(r.token || "").trim()).filter(Boolean);
-  if (tokens.length === 0) {
+  const rows = tokenRes.rows
+    .map((r) => ({
+      token: String(r.token || "").trim(),
+      platform: String(r.platform || "").trim().toUpperCase(),
+    }))
+    .filter((r) => r.token);
+  if (rows.length === 0) {
     console.warn("[push] skip: no active tokens", { recipientUserId, canonicalType });
+    return;
+  }
+
+  // Android registers FCM tokens. iOS currently may register raw APNs device tokens (64 hex),
+  // which FCM cannot deliver to — those must become FCM tokens via Firebase Messaging.
+  const fcmTokens = [];
+  const skippedApnsHex = [];
+  for (const row of rows) {
+    if (looksLikeApnsDeviceToken(row.token)) {
+      skippedApnsHex.push(row.token);
+      continue;
+    }
+    fcmTokens.push(row.token);
+  }
+  if (skippedApnsHex.length > 0) {
+    console.warn("[push] skip APNs hex device tokens (need FCM token from Firebase iOS SDK)", {
+      recipientUserId,
+      canonicalType,
+      count: skippedApnsHex.length,
+    });
+  }
+  if (fcmTokens.length === 0) {
+    console.warn("[push] skip: no FCM-capable tokens", { recipientUserId, canonicalType });
     return;
   }
 
@@ -210,7 +238,7 @@ async function sendEventDataNotification({
     return;
   }
 
-  // Data-only payload by design. Never send "notification" block.
+  // Data payload for in-app routing + APNs alert so iOS shows a system banner when backgrounded.
   const data = buildDataPayload({
     type: canonicalType,
     title,
@@ -224,17 +252,32 @@ async function sendEventDataNotification({
   });
 
   const multicast = {
-    tokens,
+    tokens: fcmTokens,
     data,
     android: {
       priority: "high",
+    },
+    apns: {
+      headers: {
+        "apns-priority": "10",
+        "apns-push-type": "alert",
+      },
+      payload: {
+        aps: {
+          alert: {
+            title: String(title || "").trim(),
+            body: String(body || "").trim(),
+          },
+          sound: "default",
+        },
+      },
     },
   };
 
   const result = await messaging.sendEachForMulticast(multicast);
   const failed = [];
   result.responses.forEach((r, i) => {
-    if (!r.success) failed.push({ token: tokens[i], error: r.error });
+    if (!r.success) failed.push({ token: fcmTokens[i], error: r.error });
   });
   for (const f of failed) {
     const code = String(f.error?.code || "");
@@ -242,6 +285,10 @@ async function sendEventDataNotification({
       await deactivatePushToken(f.token);
     }
   }
+}
+
+function looksLikeApnsDeviceToken(token) {
+  return /^[0-9a-fA-F]{64}$/.test(String(token || "").trim());
 }
 
 /**

@@ -676,6 +676,7 @@ async function listMyStories(userId) {
             s.expires_at,
             s.text_font_id,
             COALESCE(s.is_text_only, FALSE) AS is_text_only,
+            COALESCE(s.audience, 'EVERYONE') AS audience,
             (SELECT COUNT(*)::int FROM story_interactions si
              WHERE si.story_id = s.id AND si.interaction_type = 'VIEW') AS view_count
      FROM stories s
@@ -697,6 +698,7 @@ async function listMyStories(userId) {
       viewCount: Number(row.view_count || 0),
       textFontId: row.text_font_id ? String(row.text_font_id) : null,
       isTextOnly: row.is_text_only === true,
+      audience: String(row.audience || "EVERYONE").toUpperCase() === "FRIENDS_ONLY" ? "FRIENDS_ONLY" : "EVERYONE",
     });
   }
   return { stories };
@@ -1324,6 +1326,7 @@ ${advMatchEthnicityAnd}
       expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
       textFontId: row.text_font_id ? String(row.text_font_id) : null,
       isTextOnly: row.is_text_only === true,
+      audience: String(row.audience || "EVERYONE").toUpperCase() === "FRIENDS_ONLY" ? "FRIENDS_ONLY" : "EVERYONE",
       _viewedByViewer: viewed,
     });
   }
@@ -1457,6 +1460,7 @@ async function listStoryReelForNotificationPeer(viewerId, peerUserId) {
       expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
       textFontId: row.text_font_id ? String(row.text_font_id) : null,
       isTextOnly: row.is_text_only === true,
+      audience: String(row.audience || "EVERYONE").toUpperCase() === "FRIENDS_ONLY" ? "FRIENDS_ONLY" : "EVERYONE",
       _viewedByViewer: viewed,
     });
   }

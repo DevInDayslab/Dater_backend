@@ -14,8 +14,11 @@ const configRoutes = require("./routes/config.routes");
 const billingRoutes = require("./routes/billing.routes");
 const paymentsRoutes = require("./routes/payments.routes");
 const adminRoutes = require("./routes/admin/index");
+const landingRoutes = require("./routes/landing.routes");
 
 const app = express();
+
+app.set("trust proxy", 1);
 
 app.use(helmet());
 app.use(cors());
@@ -42,5 +45,6 @@ app.use("/api/v1/config", configRoutes);
 app.use("/api/v1/billing", billingRoutes);
 app.use("/api/v1/payments", paymentsRoutes);
 app.use("/api/v1/admin", adminRoutes);
+app.use("/api/v1/landing", landingRoutes);
 
 module.exports = app;

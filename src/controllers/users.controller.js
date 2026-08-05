@@ -2029,6 +2029,20 @@ async function registerPushToken(req, res) {
     const platform = String(req.body?.platform || "ANDROID").trim().toUpperCase() || "ANDROID";
     const deviceId = String(req.body?.deviceId || "").trim();
 
+    // Old iOS builds registered raw 64-char APNs hex tokens. Firebase Admin cannot
+    // deliver to those; retire them as soon as this user registers a real FCM token.
+    if (platform === "IOS" && !/^[0-9a-fA-F]{64}$/.test(token)) {
+      await query(
+        `UPDATE user_push_tokens
+         SET is_active = FALSE,
+             last_seen_at = NOW()
+         WHERE user_id = $1::uuid
+           AND platform = 'IOS'
+           AND token ~ '^[0-9a-fA-F]{64}$'`,
+        [userId]
+      );
+    }
+
     // One FCM installation token maps to one device; rebinding must clear prior accounts on this token.
     await query(
       `UPDATE user_push_tokens
