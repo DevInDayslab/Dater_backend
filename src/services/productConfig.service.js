@@ -151,6 +151,8 @@ function toAppleCatalogItem(product) {
     quantity: product.quantity,
     durationDays: product.durationDays,
     planCode: product.planCode,
+    displayTitle: product.displayTitle,
+    displayLabel: product.displayLabel,
     badgeType: product.badgeType,
     badgeText: product.badgeText,
     isDefault: product.isDefault,
