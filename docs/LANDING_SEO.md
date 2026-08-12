@@ -29,7 +29,8 @@ cd backend
 npm run migrate
 ```
 
-Applies `sql/047_landing_page_seo.sql` (creates `landing_page_seo` + seeds `page_slug = 'home'`).
+Applies `sql/047_landing_page_seo.sql` (table + home seed) and
+`sql/048_landing_page_seo_all_pages.sql` (all landing routes).
 
 Offline module check (no DB):
 
@@ -41,10 +42,14 @@ DATABASE_URL=postgres://localhost:5432/dater npm run smoke:seo
 
 Protected by existing admin auth (`requireAdminAuth`):
 
-- `GET /api/v1/admin/seo`
-- `PUT /api/v1/admin/seo` — body: `meta_title`, `meta_description`, `og_image_url`, `canonical_url`, `is_indexed`
+- `GET /api/v1/admin/seo` — list catalog + all rows
+- `GET /api/v1/admin/seo/:slug` — one page (`home`, `about`, `faq`, …)
+- `PUT /api/v1/admin/seo/:slug` — body: `meta_title`, `meta_description`, `og_image_url`, `canonical_url`, `is_indexed`
+- `PUT /api/v1/admin/seo` — backward-compatible update for `home`
 
-Edit via the sibling app **`DaterSeoAdmin`** (port 5175 in dev).
+Document requests map path → slug (`/about` → `about`, `/contact` → `contact-us`, etc.) and inject that row’s tags. Response header `X-Landing-Seo-Slug` shows which slug was used.
+
+Edit via the sibling app **`DaterSeoAdmin`** (port 5175 in dev) — pick a page from the dropdown, then save.
 
 ## Production hosting (move off Vercel)
 
@@ -61,6 +66,7 @@ Point **`dater.social`** (or your marketing hostname) at the **same Node process
 ```bash
 curl -s http://127.0.0.1:3000/health
 curl -s -A "facebookexternalhit/1.1" http://127.0.0.1:3000/ | head -n 40
+curl -s -A "facebookexternalhit/1.1" -D - http://127.0.0.1:3000/about -o /dev/null | rg -i 'x-landing-seo-slug'
 ```
 
 You should see injected meta tags in the raw HTML.

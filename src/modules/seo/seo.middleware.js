@@ -3,6 +3,7 @@
 const path = require("path");
 const fs = require("fs");
 const seoService = require("./seo.service");
+const { pathToPageSlug } = require("./seo.pages");
 const { injectSeoIntoHtml } = require("./seo.inject");
 
 function resolveLandingDistPath() {
@@ -18,8 +19,7 @@ function resolveIndexHtmlPath() {
 }
 
 /**
- * Serve Vite landing index.html with SEO meta injected from PostgreSQL.
- * Same home SEO for all SPA document routes in v1.
+ * Serve Vite landing index.html with SEO meta for the requested path's page_slug.
  */
 async function serveLandingWithDynamicSeo(req, res, next) {
   try {
@@ -36,11 +36,13 @@ async function serveLandingWithDynamicSeo(req, res, next) {
       });
     }
 
+    const pageSlug = pathToPageSlug(req.path || "/");
     const rawHtml = fs.readFileSync(indexPath, "utf8");
-    const seo = await seoService.getSeo();
+    const seo = await seoService.getSeoBySlug(pageSlug);
     const html = injectSeoIntoHtml(rawHtml, seo);
 
     res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Landing-Seo-Slug", pageSlug);
     return res.status(200).type("html").send(html);
   } catch (error) {
     return next(error);

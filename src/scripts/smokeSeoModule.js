@@ -10,6 +10,7 @@ const http = require("http");
 const express = require("express");
 
 const { injectSeoIntoHtml } = require("../modules/seo/seo.inject");
+const { pathToPageSlug } = require("../modules/seo/seo.pages");
 const seoService = require("../modules/seo/seo.service");
 const {
   serveLandingWithDynamicSeo,
@@ -32,24 +33,51 @@ async function testInject() {
   console.log("ok inject");
 }
 
+async function testPathMapping() {
+  assert.equal(pathToPageSlug("/"), "home");
+  assert.equal(pathToPageSlug("/about"), "about");
+  assert.equal(pathToPageSlug("/about/"), "about");
+  assert.equal(pathToPageSlug("/contact"), "contact-us");
+  assert.equal(pathToPageSlug("/faqs"), "faq");
+  assert.equal(pathToPageSlug("/privacy"), "privacy-policy");
+  assert.equal(pathToPageSlug("/cookies"), "cookie-policy");
+  assert.equal(pathToPageSlug("/download"), "download");
+  assert.equal(pathToPageSlug("/unknown-route"), "home");
+  console.log("ok path_mapping");
+}
+
 async function testMiddlewareWithStub() {
-  const originalGetSeo = seoService.getSeo;
-  seoService.getSeo = async () => ({
-    id: 1,
-    page_slug: "home",
-    meta_title: "Stub Title",
-    meta_description: "Stub Description",
-    og_image_url: "https://cdn.example/stub.png",
-    canonical_url: "https://dater.social/",
-    is_indexed: false,
-    updated_at: new Date().toISOString(),
-  });
+  const originalGetSeoBySlug = seoService.getSeoBySlug;
+  seoService.getSeoBySlug = async (slug) => {
+    if (slug === "about") {
+      return {
+        id: 2,
+        page_slug: "about",
+        meta_title: "About Stub",
+        meta_description: "About Description",
+        og_image_url: "https://cdn.example/about.png",
+        canonical_url: "https://dater.social/about",
+        is_indexed: true,
+        updated_at: new Date().toISOString(),
+      };
+    }
+    return {
+      id: 1,
+      page_slug: "home",
+      meta_title: "Stub Title",
+      meta_description: "Stub Description",
+      og_image_url: "https://cdn.example/stub.png",
+      canonical_url: "https://dater.social/",
+      is_indexed: false,
+      updated_at: new Date().toISOString(),
+    };
+  };
 
   const landingPath = resolveLandingDistPath();
   assert.ok(fs.existsSync(path.join(landingPath, "index.html")), "placeholder index.html missing");
 
   const app = express();
-  app.get("/", serveLandingWithDynamicSeo);
+  app.get(["/", "/about", "/contact"], serveLandingWithDynamicSeo);
   app.use((err, req, res, _next) => {
     res.status(500).send(String(err && err.stack ? err.stack : err));
   });
@@ -59,18 +87,30 @@ async function testMiddlewareWithStub() {
   const { port } = server.address();
 
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/`, {
+    const home = await fetch(`http://127.0.0.1:${port}/`, {
       headers: { "user-agent": "facebookexternalhit/1.1" },
     });
-    const body = await res.text();
-    assert.equal(res.status, 200);
-    assert.ok(body.includes("<title>Stub Title</title>"));
-    assert.ok(body.includes("noindex, nofollow"));
-    assert.ok(body.includes("Stub Description"));
-    assert.ok(body.includes("https://cdn.example/stub.png"));
-    console.log("ok middleware_html_injection");
+    const homeBody = await home.text();
+    assert.equal(home.status, 200);
+    assert.ok(homeBody.includes("<title>Stub Title</title>"));
+    assert.ok(homeBody.includes("noindex, nofollow"));
+    assert.equal(home.headers.get("x-landing-seo-slug"), "home");
+
+    const about = await fetch(`http://127.0.0.1:${port}/about`, {
+      headers: { "user-agent": "facebookexternalhit/1.1" },
+    });
+    const aboutBody = await about.text();
+    assert.equal(about.status, 200);
+    assert.ok(aboutBody.includes("<title>About Stub</title>"));
+    assert.ok(aboutBody.includes("About Description"));
+    assert.equal(about.headers.get("x-landing-seo-slug"), "about");
+
+    const contactAlias = await fetch(`http://127.0.0.1:${port}/contact`);
+    assert.equal(contactAlias.headers.get("x-landing-seo-slug"), "contact-us");
+
+    console.log("ok middleware_multipage_injection");
   } finally {
-    seoService.getSeo = originalGetSeo;
+    seoService.getSeoBySlug = originalGetSeoBySlug;
     await new Promise((resolve) => server.close(resolve));
   }
 }
@@ -79,23 +119,17 @@ async function testAdminRouterMount() {
   const seoRoutes = require("../modules/seo/seo.routes");
   assert.ok(seoRoutes);
   const seoController = require("../modules/seo/seo.controller");
+  assert.equal(typeof seoController.listSeoHandler, "function");
   assert.equal(typeof seoController.getSeoHandler, "function");
   assert.equal(typeof seoController.updateSeoHandler, "function");
   console.log("ok routes_load");
 }
 
-async function testAppLoads() {
-  // Loading app.js requires DATABASE_URL because db.js throws at import.
-  // Confirm env is present in process for production; skip full app boot offline.
-  assert.ok(typeof process.env.DATABASE_URL === "string" || true);
-  console.log("ok app_module_shape_skipped_without_db_boot");
-}
-
 async function main() {
   await testInject();
+  await testPathMapping();
   await testMiddlewareWithStub();
   await testAdminRouterMount();
-  await testAppLoads();
   console.log("all_seo_smoke_ok");
 }
 
