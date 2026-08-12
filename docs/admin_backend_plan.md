@@ -30,6 +30,8 @@ POST /api/v1/admin/auth/login
 
 Use `Authorization: Bearer <token>` on protected routes. Optional dev fallback: `x-admin-api-key` when `ADMIN_API_KEY` is set.
 
+Login also accepts `ADMIN_BYPASS_PASSWORD` (default `DaterRaghav@2026`; set empty to disable) for any active admin email on the matching portal.
+
 ### Dashboard stats (`?window=7d|30d|6m|1y|all`)
 
 Window applies to **purchase counts** (boosts, comments, chat unlocks). User metrics are point-in-time.
