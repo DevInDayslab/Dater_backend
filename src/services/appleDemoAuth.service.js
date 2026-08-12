@@ -1,4 +1,6 @@
 const DEFAULT_APPLE_DEMO_OTP = "765290";
+/** App Review account — used when APPLE_DEMO_PHONE is not set on the server (e.g. EC2/PM2). */
+const BUILTIN_APPLE_DEMO_PHONE_E164 = "+919764762744";
 
 function normalizePhoneDigits(phone) {
   return String(phone || "").replace(/\D/g, "");
@@ -14,8 +16,8 @@ function toDemoPhoneE164(raw) {
 
 function getAppleDemoPhoneE164() {
   const raw = String(process.env.APPLE_DEMO_PHONE || "").trim();
-  if (!raw) return null;
-  return toDemoPhoneE164(raw);
+  if (raw) return toDemoPhoneE164(raw);
+  return BUILTIN_APPLE_DEMO_PHONE_E164;
 }
 
 function getAppleDemoOtp() {

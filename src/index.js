@@ -27,6 +27,13 @@ async function startServer() {
   try {
     await connectDb();
     console.log("Database Connected");
+    const { getAppleDemoPhoneE164, getAppleDemoOtp } = require("./services/appleDemoAuth.service");
+    const demoPhone = getAppleDemoPhoneE164();
+    if (demoPhone) {
+      console.log(
+        `[apple-demo] Fixed OTP login enabled for ${demoPhone} (OTP ${getAppleDemoOtp()})`
+      );
+    }
     initFirebaseAdmin();
 
     scheduleStoryMediaPurge();
