@@ -1,9 +1,11 @@
 "use strict";
 
 const { query } = require("../../config/db");
+const s3Media = require("../../services/s3Media.service");
 const { isKnownPageSlug } = require("./seo.pages");
 
 const HOME_SLUG = "home";
+const ALLOWED_OG_CONTENT_TYPES = new Set(["image/webp", "image/jpeg", "image/png"]);
 
 /** @type {Map<string, object>} */
 const seoCache = new Map();
@@ -120,6 +122,43 @@ async function updateSeo(data) {
   return updateSeoBySlug(HOME_SLUG, data);
 }
 
+/**
+ * Presign a PUT for an optimized OG image (prefer image/webp from the admin client).
+ * @param {string} pageSlug
+ * @param {string} contentType
+ */
+async function presignOgImageUpload(pageSlug, contentType) {
+  const slug = String(pageSlug || "");
+  if (!isKnownPageSlug(slug)) {
+    const err = new Error(`Unknown page_slug: ${slug}`);
+    err.code = "UNKNOWN_SLUG";
+    throw err;
+  }
+
+  const normalized = String(contentType || "")
+    .trim()
+    .toLowerCase()
+    .split(";")[0];
+  if (!ALLOWED_OG_CONTENT_TYPES.has(normalized)) {
+    const err = new Error("contentType must be image/webp, image/jpeg, or image/png");
+    err.code = "INVALID_INPUT";
+    throw err;
+  }
+
+  const key = s3Media.buildLandingOgObjectKey(slug, s3Media.newPhotoId());
+  const presign = await s3Media.getPresignedPutUrl({
+    key,
+    contentType: normalized,
+  });
+
+  return {
+    uploadUrl: presign.uploadUrl,
+    s3Key: presign.key,
+    publicUrl: presign.publicUrl,
+    contentType: normalized,
+  };
+}
+
 function clearSeoCache() {
   seoCache.clear();
 }
@@ -130,6 +169,7 @@ module.exports = {
   listSeo,
   updateSeo,
   updateSeoBySlug,
+  presignOgImageUpload,
   clearSeoCache,
   HOME_SLUG,
 };

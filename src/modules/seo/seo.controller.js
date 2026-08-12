@@ -129,8 +129,36 @@ async function updateSeoHandler(req, res) {
   }
 }
 
+async function presignOgImageHandler(req, res) {
+  try {
+    const slug = req.params.slug;
+    if (!isKnownPageSlug(slug)) {
+      return res.status(404).json({
+        success: false,
+        message: `Unknown page_slug: ${slug}`,
+      });
+    }
+
+    const data = await seoService.presignOgImageUpload(slug, req.body?.contentType);
+    return res.status(200).json({
+      success: true,
+      message: "OG image upload URL created",
+      data,
+    });
+  } catch (error) {
+    const status =
+      error.code === "UNKNOWN_SLUG" ? 404 : error.code === "INVALID_INPUT" ? 400 : 500;
+    return res.status(status).json({
+      success: false,
+      message: "Failed to create OG image upload URL",
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   listSeoHandler,
   getSeoHandler,
   updateSeoHandler,
+  presignOgImageHandler,
 };

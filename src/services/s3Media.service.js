@@ -40,6 +40,14 @@ function buildLandingContactObjectKey(contactId, ext) {
   return `landing/contacts/${contactId}.${safeExt}`;
 }
 
+function buildLandingOgObjectKey(pageSlug, imageId) {
+  const safeSlug = String(pageSlug || "home")
+    .replace(/[^a-z0-9-]/gi, "")
+    .toLowerCase() || "home";
+  const id = String(imageId || newPhotoId()).replace(/[^a-zA-Z0-9-_]/g, "") || newPhotoId();
+  return `landing/seo/${safeSlug}/${id}.webp`;
+}
+
 function newPhotoId() {
   return crypto.randomUUID();
 }
@@ -136,6 +144,7 @@ module.exports = {
   buildStoryObjectKey,
   buildPlatformSplashObjectKey,
   buildLandingContactObjectKey,
+  buildLandingOgObjectKey,
   newPhotoId,
   getPresignedPutUrl,
   getPresignedGetUrl,

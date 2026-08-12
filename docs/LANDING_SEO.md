@@ -45,6 +45,7 @@ Protected by existing admin auth (`requireAdminAuth`):
 - `GET /api/v1/admin/seo` — list catalog + all rows
 - `GET /api/v1/admin/seo/:slug` — one page (`home`, `about`, `faq`, …)
 - `PUT /api/v1/admin/seo/:slug` — body: `meta_title`, `meta_description`, `og_image_url`, `canonical_url`, `is_indexed`
+- `POST /api/v1/admin/seo/:slug/og-image/presign` — `{ contentType }` → S3 PUT URL for OG image (`landing/seo/{slug}/*.webp`)
 - `PUT /api/v1/admin/seo` — backward-compatible update for `home`
 
 Document requests map path → slug (`/about` → `about`, `/contact` → `contact-us`, etc.) and inject that row’s tags. Response header `X-Landing-Seo-Slug` shows which slug was used.
