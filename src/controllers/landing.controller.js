@@ -133,7 +133,54 @@ async function submitContact(req, res) {
   }
 }
 
+async function serveSeoMedia(req, res) {
+  try {
+    const s3Media = require("../services/s3Media.service");
+    const { isLandingSeoS3Key } = require("../modules/seo/seo.publicUrl");
+
+    // Express 5: /seo-media/*key → req.params.key is an array of path segments
+    const keyParam = req.params.key;
+    const joined = Array.isArray(keyParam)
+      ? keyParam.join("/")
+      : String(keyParam || req.params[0] || "");
+    const rawKey = joined
+      .replace(/^\/+/, "")
+      .split("/")
+      .map((part) => decodeURIComponent(part))
+      .filter(Boolean)
+      .join("/");
+
+    if (!isLandingSeoS3Key(rawKey)) {
+      return res.status(400).json({ success: false, message: "Invalid SEO media key" });
+    }
+
+    const bytes = await s3Media.getObjectBytes(rawKey);
+    const lower = rawKey.toLowerCase();
+    const contentType = lower.endsWith(".png")
+      ? "image/png"
+      : lower.endsWith(".jpg") || lower.endsWith(".jpeg")
+        ? "image/jpeg"
+        : "image/webp";
+
+    res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
+    res.setHeader("Content-Type", contentType);
+    // Allow embedding in link previews / third-party scrapers (Helmet defaults to same-origin).
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    return res.status(200).send(bytes);
+  } catch (error) {
+    if (error?.name === "NoSuchKey" || error?.$metadata?.httpStatusCode === 404) {
+      return res.status(404).json({ success: false, message: "SEO media not found" });
+    }
+    return res.status(500).json({
+      success: false,
+      message: "Failed to serve SEO media",
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   presignAttachment,
   submitContact,
+  serveSeoMedia,
 };

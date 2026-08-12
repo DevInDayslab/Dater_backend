@@ -64,6 +64,12 @@ Protected by existing admin auth (`requireAdminAuth`):
 
 Document requests map path → slug. Response header `X-Landing-Seo-Slug` shows which slug was used.
 
+**OG images:** uploaded to private S3 under `landing/seo/…`, then exposed to crawlers via:
+
+`GET /api/v1/landing/seo-media/landing/seo/{page}/{id}.webp`
+
+Injection rewrites old raw S3 `og:image` URLs to this public proxy automatically.
+
 Edit via **`DaterSeoAdmin`**.
 
 ## Canonical URLs while testing on Vercel

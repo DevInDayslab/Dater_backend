@@ -3,6 +3,12 @@
 /**
  * Offline smoke tests for SEO module (no database required).
  */
+require("dotenv").config();
+if (!process.env.DATABASE_URL) {
+  // seo.service pulls db config at require-time; smoke stubs DB usage.
+  process.env.DATABASE_URL = "postgres://smoke:smoke@127.0.0.1:5432/smoke";
+}
+
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
@@ -29,8 +35,30 @@ async function testInject() {
   assert.ok(out.includes("<title>DATER SEO</title>"));
   assert.ok(out.includes('content="index, follow"'));
   assert.ok(out.includes("og:title"));
+  assert.ok(out.includes("og:site_name"));
   assert.ok(out.includes("twitter:image"));
   console.log("ok inject");
+}
+
+async function testPrivateS3OgRewrite() {
+  const { toCrawlerVisibleOgImageUrl } = require("../modules/seo/seo.publicUrl");
+  const s3Media = require("../services/s3Media.service");
+  const key = "landing/seo/home/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.webp";
+  const privateUrl = `https://${s3Media.s3Bucket}.s3.${s3Media.s3Region}.amazonaws.com/${key}`;
+  const rewritten = toCrawlerVisibleOgImageUrl(privateUrl);
+  assert.ok(rewritten.includes("/api/v1/landing/seo-media/landing/seo/home/"));
+  assert.ok(!rewritten.includes("amazonaws.com"));
+
+  const html = injectSeoIntoHtml("<html><head><title>x</title></head></html>", {
+    meta_title: "T",
+    meta_description: "D",
+    og_image_url: privateUrl,
+    canonical_url: "https://dater.social/",
+    is_indexed: true,
+  });
+  assert.ok(html.includes("/api/v1/landing/seo-media/"));
+  assert.ok(!html.includes("amazonaws.com"));
+  console.log("ok private_s3_og_rewrite");
 }
 
 async function testPathMapping() {
@@ -127,6 +155,7 @@ async function testAdminRouterMount() {
 
 async function main() {
   await testInject();
+  await testPrivateS3OgRewrite();
   await testPathMapping();
   await testMiddlewareWithStub();
   await testAdminRouterMount();

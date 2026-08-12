@@ -3,6 +3,7 @@
 const { query } = require("../../config/db");
 const s3Media = require("../../services/s3Media.service");
 const { isKnownPageSlug } = require("./seo.pages");
+const publicMedia = require("./seo.publicUrl");
 
 const HOME_SLUG = "home";
 const ALLOWED_OG_CONTENT_TYPES = new Set(["image/webp", "image/jpeg", "image/png"]);
@@ -158,7 +159,8 @@ async function presignOgImageUpload(pageSlug, contentType) {
   return {
     uploadUrl: presign.uploadUrl,
     s3Key: presign.key,
-    publicUrl: presign.publicUrl,
+    publicUrl: publicMedia.buildPublicSeoMediaUrl(presign.key),
+    s3ObjectUrl: presign.publicUrl,
     readUrl,
     contentType: normalized,
   };

@@ -88,7 +88,8 @@ function injectSeoIntoHtml(html, seo) {
   const title = seo.meta_title || "DATER";
   const description = seo.meta_description || "";
   const robots = seo.is_indexed ? "index, follow" : "noindex, nofollow";
-  const ogImage = seo.og_image_url || "";
+  const { toCrawlerVisibleOgImageUrl } = require("./seo.publicUrl");
+  const ogImage = toCrawlerVisibleOgImageUrl(seo.og_image_url || "");
   const canonical = seo.canonical_url || "";
 
   let out = html;
@@ -98,6 +99,7 @@ function injectSeoIntoHtml(html, seo) {
   out = upsertCanonical(out, canonical || null);
 
   out = upsertMeta(out, "property", "og:type", "website");
+  out = upsertMeta(out, "property", "og:site_name", "DATER");
   out = upsertMeta(out, "property", "og:title", title);
   out = upsertMeta(out, "property", "og:description", description);
   if (canonical) {
@@ -105,6 +107,8 @@ function injectSeoIntoHtml(html, seo) {
   }
   if (ogImage) {
     out = upsertMeta(out, "property", "og:image", ogImage);
+    out = upsertMeta(out, "property", "og:image:width", "1200");
+    out = upsertMeta(out, "property", "og:image:height", "630");
   }
 
   out = upsertMeta(out, "name", "twitter:card", "summary_large_image");

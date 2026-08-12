@@ -8,6 +8,9 @@ const {
 
 const router = express.Router();
 
+// Public OG/Twitter image proxy (private S3 → crawlable URL).
+router.get("/seo-media/*key", landingController.serveSeoMedia);
+
 router.post(
   "/contact/presign-attachment",
   landingContactPresignLimiter,
