@@ -10,10 +10,11 @@ function clientMeta(req) {
 
 async function login(req, res) {
   try {
-    const { email, password } = req.body || {};
+    const { email, password, portal } = req.body || {};
     const result = await adminAuthService.login({
       email,
       password,
+      portal,
       ...clientMeta(req),
     });
     return res.status(200).json({
@@ -26,7 +27,8 @@ async function login(req, res) {
       },
     });
   } catch (error) {
-    const status = error.code === "INVALID_CREDENTIALS" ? 401 : 500;
+    const status =
+      error.code === "INVALID_CREDENTIALS" || error.code === "WRONG_PORTAL" ? 401 : 500;
     return res.status(status).json({
       success: false,
       message: error.message || "Admin login failed",

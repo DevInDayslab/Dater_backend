@@ -16,7 +16,7 @@ Approved implementation plan for the Dater Admin Panel backend. Mobile routes ar
 | Item | Path |
 |------|------|
 | Migration | `sql/034_admin_panel.sql` |
-| Seed admin | `npm run seed:admin` (env: `ADMIN_SEED_EMAIL`, `ADMIN_SEED_PASSWORD`) |
+| Seed admin | `npm run seed:admin` (env: `ADMIN_SEED_EMAIL` default `birsingh@dater.app`, `ADMIN_SEED_PASSWORD`) |
 | Auth | `POST /api/v1/admin/auth/login`, `refresh`, `logout` |
 | Dashboard | `GET /api/v1/admin/dashboard/stats`, `growth`, `badges` |
 
@@ -85,4 +85,11 @@ Use `account_state = 'BANNED'` — never `is_banned`.
 - `POST /audience-size`, `POST /`, `GET /history`
 
 ### Settings (`/api/v1/admin/settings`)
-- `GET /admins`, `POST /admins`, `PATCH /admins/:adminId`
+- `GET /account` — current logged-in FULL admin
+- `POST /change-password` — self-service password change (revokes other sessions)
+- `GET /seo-admin` — SEO admin account status
+- `PUT /seo-admin` — create/update SEO admin credentials (revokes all SEO sessions on credential change)
+- `GET /seo-admin/sessions` — list active SEO sessions
+- `POST /seo-admin/revoke-sessions` — revoke all SEO sessions
+
+Admin roles (`admin_users.role`): `FULL` (DaterAdmin) | `SEO` (DaterSeoAdmin). Login accepts optional `portal: "full" | "seo"` to restrict by role.

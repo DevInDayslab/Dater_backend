@@ -4,12 +4,14 @@ const { query, pool } = require("../config/db");
 const { hashPassword } = require("../utils/adminPassword");
 
 async function main() {
-  const email = String(process.env.ADMIN_SEED_EMAIL || "").trim().toLowerCase();
+  const email = String(process.env.ADMIN_SEED_EMAIL || "birsingh@dater.app")
+    .trim()
+    .toLowerCase();
   const password = String(process.env.ADMIN_SEED_PASSWORD || "");
   const name = String(process.env.ADMIN_SEED_NAME || "Admin").trim() || "Admin";
 
-  if (!email || !password) {
-    console.error("Set ADMIN_SEED_EMAIL and ADMIN_SEED_PASSWORD in backend/.env");
+  if (!password) {
+    console.error("Set ADMIN_SEED_PASSWORD in backend/.env");
     process.exit(2);
   }
 
@@ -21,13 +23,14 @@ async function main() {
   const passwordHash = hashPassword(password);
 
   const result = await query(
-    `INSERT INTO admin_users (email, name, password_hash, status)
-     VALUES ($1, $2, $3, 'ACTIVE')
+    `INSERT INTO admin_users (email, name, password_hash, status, role)
+     VALUES ($1, $2, $3, 'ACTIVE', 'FULL')
      ON CONFLICT (email) DO UPDATE
        SET name = EXCLUDED.name,
            password_hash = EXCLUDED.password_hash,
-           status = 'ACTIVE'
-     RETURNING id, email, name, status, created_at`,
+           status = 'ACTIVE',
+           role = 'FULL'
+     RETURNING id, email, name, status, role, created_at`,
     [email, name, passwordHash]
   );
 
@@ -37,6 +40,7 @@ async function main() {
     email: row.email,
     name: row.name,
     status: row.status,
+    role: row.role,
     createdAt: row.created_at,
   });
 }

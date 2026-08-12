@@ -17,6 +17,7 @@ async function requireAdminAuth(req, res, next) {
         jwtId: null,
         email: "api-key@admin",
         name: "API Key Admin",
+        role: adminAuthService.ADMIN_ROLE_FULL,
         viaApiKey: true,
       };
       return next();
@@ -38,7 +39,36 @@ async function requireAdminAuth(req, res, next) {
   }
 }
 
+function requireFullAdmin(req, res, next) {
+  if (req.admin?.viaApiKey || req.admin?.role === adminAuthService.ADMIN_ROLE_FULL) {
+    return next();
+  }
+  return res.status(403).json({
+    success: false,
+    message: "Full admin access required",
+    code: "FULL_ADMIN_REQUIRED",
+  });
+}
+
+function requireSeoAccess(req, res, next) {
+  const role = req.admin?.role;
+  if (
+    req.admin?.viaApiKey ||
+    role === adminAuthService.ADMIN_ROLE_FULL ||
+    role === adminAuthService.ADMIN_ROLE_SEO
+  ) {
+    return next();
+  }
+  return res.status(403).json({
+    success: false,
+    message: "SEO admin access required",
+    code: "SEO_ACCESS_REQUIRED",
+  });
+}
+
 module.exports = {
   requireAdminAuth,
+  requireFullAdmin,
+  requireSeoAccess,
   extractBearerToken,
 };

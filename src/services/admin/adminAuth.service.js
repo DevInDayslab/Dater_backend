@@ -1,9 +1,12 @@
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
-const { query, pool } = require("../../config/db");
+const { query } = require("../../config/db");
 const { verifyPassword } = require("../../utils/adminPassword");
 
 const ADMIN_ACCESS_TOKEN_TTL_SECONDS = 60 * 60 * 8; // 8 hours
+
+const ADMIN_ROLE_FULL = "FULL";
+const ADMIN_ROLE_SEO = "SEO";
 
 function adminJwtSecret() {
   const secret = process.env.ADMIN_JWT_SECRET || process.env.JWT_SECRET;
@@ -18,6 +21,7 @@ function toAdminPublic(row) {
     id: row.id,
     email: row.email,
     name: row.name,
+    role: row.role || ADMIN_ROLE_FULL,
   };
 }
 
@@ -51,7 +55,23 @@ async function createAdminSession({ adminUserId, ipAddress, userAgent }) {
   };
 }
 
-async function login({ email, password, ipAddress, userAgent }) {
+function assertPortalAccess(role, portal) {
+  const normalizedPortal = String(portal || "").trim().toLowerCase();
+  if (!normalizedPortal) return;
+
+  if (normalizedPortal === "full" && role !== ADMIN_ROLE_FULL) {
+    const err = new Error("Invalid email or password");
+    err.code = "WRONG_PORTAL";
+    throw err;
+  }
+  if (normalizedPortal === "seo" && role !== ADMIN_ROLE_SEO) {
+    const err = new Error("Invalid email or password");
+    err.code = "WRONG_PORTAL";
+    throw err;
+  }
+}
+
+async function login({ email, password, portal, ipAddress, userAgent }) {
   const normalizedEmail = String(email || "").trim().toLowerCase();
   if (!normalizedEmail || !password) {
     const err = new Error("Email and password are required");
@@ -60,7 +80,7 @@ async function login({ email, password, ipAddress, userAgent }) {
   }
 
   const res = await query(
-    `SELECT id, email, name, password_hash, status
+    `SELECT id, email, name, password_hash, status, role
      FROM admin_users
      WHERE email = $1
      LIMIT 1`,
@@ -72,6 +92,8 @@ async function login({ email, password, ipAddress, userAgent }) {
     err.code = "INVALID_CREDENTIALS";
     throw err;
   }
+
+  assertPortalAccess(row.role || ADMIN_ROLE_FULL, portal);
 
   await query(`UPDATE admin_users SET last_login_at = NOW() WHERE id = $1`, [row.id]);
 
@@ -104,7 +126,7 @@ async function verifyAdminAccessToken(tokenInput) {
 
   const sessionRes = await query(
     `SELECT s.id, s.admin_user_id, s.jwt_id, s.revoked_at, s.expires_at,
-            u.email, u.name, u.status
+            u.email, u.name, u.status, u.role
      FROM admin_sessions s
      JOIN admin_users u ON u.id = s.admin_user_id
      WHERE s.id = $1
@@ -141,7 +163,30 @@ async function verifyAdminAccessToken(tokenInput) {
     jwtId: session.jwt_id,
     email: session.email,
     name: session.name,
+    role: session.role || ADMIN_ROLE_FULL,
   };
+}
+
+async function revokeAllSessions(adminUserId, { exceptSessionId } = {}) {
+  if (exceptSessionId) {
+    await query(
+      `UPDATE admin_sessions
+       SET revoked_at = NOW()
+       WHERE admin_user_id = $1
+         AND revoked_at IS NULL
+         AND id <> $2`,
+      [adminUserId, exceptSessionId]
+    );
+    return;
+  }
+
+  await query(
+    `UPDATE admin_sessions
+     SET revoked_at = NOW()
+     WHERE admin_user_id = $1
+       AND revoked_at IS NULL`,
+    [adminUserId]
+  );
 }
 
 async function refresh({ token, ipAddress, userAgent }) {
@@ -169,5 +214,9 @@ module.exports = {
   refresh,
   logout,
   verifyAdminAccessToken,
+  revokeAllSessions,
+  toAdminPublic,
   ADMIN_ACCESS_TOKEN_TTL_SECONDS,
+  ADMIN_ROLE_FULL,
+  ADMIN_ROLE_SEO,
 };
