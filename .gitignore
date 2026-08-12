@@ -9,7 +9,6 @@ yarn-error.log*
 pnpm-debug.log*
 .DS_Store
 
-# Landing SEO shell: keep index.html only (no Vite asset bundles)
-public/landing/**
-!public/landing/index.html
-!public/landing/.gitkeep
+# Never commit Vite asset bundles into the SEO HTML folder.
+# index.html is tracked on purpose (synced via DaterLanding `npm run sync:seo-html`).
+public/landing/assets/
