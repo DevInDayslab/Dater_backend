@@ -8,3 +8,8 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 .DS_Store
+
+# Landing SEO shell: keep index.html only (no Vite asset bundles)
+public/landing/**
+!public/landing/index.html
+!public/landing/.gitkeep

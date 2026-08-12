@@ -1,26 +1,40 @@
 # Landing page hosting + SEO injection
 
-The Express API can serve the Vite marketing site (`DaterLanding`) with **dynamic SEO tags** injected into `index.html` from PostgreSQL (`landing_page_seo`).
+## How it works (current setup)
 
-## Build & copy landing assets
+```text
+Browser / crawler → dater-landing.vercel.app (Vercel)
+                      │
+                      ├─ /assets/*, images, fonts  → served by Vercel
+                      │
+                      └─ /, /about, /faq, … (HTML) → middleware → api.dater.social
+                                                      Express injects SEO into index.html
+```
+
+- **Vercel** hosts the real site (JS/CSS/images).
+- **Express** only needs a copy of Vite’s **`index.html`** so it can inject `<title>`, `og:*`, etc. from Postgres.
+- Do **not** copy the full `dist/` (images/assets) into the backend.
+
+[`DaterLanding/middleware.js`](../../DaterLanding/middleware.js) proxies document routes to the API.
+
+## Sync HTML into the backend (index.html only)
 
 ```bash
-# From DaterLanding
+cd DaterLanding
 npm run build
-
-# Copy dist into the backend (default path)
-rm -rf ../backend/public/landing
-mkdir -p ../backend/public/landing
-cp -R dist/. ../backend/public/landing/
+npm run sync:seo-html
+# then redeploy the backend
 ```
 
-Override the path with env:
+That runs [`scripts/sync-seo-html.sh`](../../DaterLanding/scripts/sync-seo-html.sh), which places only:
+
+`backend/public/landing/index.html`
+
+Override folder with env (optional):
 
 ```bash
-export LANDING_DIST_PATH=/absolute/path/to/DaterLanding/dist
+export LANDING_DIST_PATH=/absolute/path/to/folder/containing/index.html
 ```
-
-`express.static` serves hashed assets from that folder. Document routes (`GET /`, `/about`, etc.) return SEO-injected `index.html` via `serveLandingWithDynamicSeo`.
 
 ## Migrate SEO table
 
@@ -45,29 +59,31 @@ Protected by existing admin auth (`requireAdminAuth`):
 - `GET /api/v1/admin/seo` — list catalog + all rows
 - `GET /api/v1/admin/seo/:slug` — one page (`home`, `about`, `faq`, …)
 - `PUT /api/v1/admin/seo/:slug` — body: `meta_title`, `meta_description`, `og_image_url`, `canonical_url`, `is_indexed`
-- `POST /api/v1/admin/seo/:slug/og-image/presign` — `{ contentType }` → S3 PUT URL for OG image (`landing/seo/{slug}/*.webp`)
+- `POST /api/v1/admin/seo/:slug/og-image/presign` — `{ contentType }` → S3 PUT URL for OG image
 - `PUT /api/v1/admin/seo` — backward-compatible update for `home`
 
-Document requests map path → slug (`/about` → `about`, `/contact` → `contact-us`, etc.) and inject that row’s tags. Response header `X-Landing-Seo-Slug` shows which slug was used.
+Document requests map path → slug. Response header `X-Landing-Seo-Slug` shows which slug was used.
 
-Edit via the sibling app **`DaterSeoAdmin`** (port 5175 in dev) — pick a page from the dropdown, then save.
+Edit via **`DaterSeoAdmin`**.
 
-## Production hosting (move off Vercel)
+## Canonical URLs while testing on Vercel
 
-Point **`dater.social`** (or your marketing hostname) at the **same Node process** that runs this API (or a reverse proxy in front of it).
+In SEO admin, set canonicals to the public Vercel host, e.g.:
 
-- Humans and crawlers (`facebookexternalhit`, Twitterbot, Googlebot) receive HTML with `<title>`, `og:*`, `twitter:*`, `robots`, and `canonical` already in the response — no client JS required.
-- Retire Vercel as the origin for the marketing site once DNS/proxy cuts over.
-- Keep `api.dater.social` as today if you prefer a split hostname; then either:
-  - proxy `/` document traffic to this app, or
-  - serve both API + landing from one host and use relative `/api/...` from the SPA.
+- `https://dater-landing.vercel.app/`
+- `https://dater-landing.vercel.app/about`
 
-## Local smoke checks
+When you attach `dater.social`, update those canonicals to the official URLs.
+
+## Smoke checks
 
 ```bash
-curl -s http://127.0.0.1:3000/health
-curl -s -A "facebookexternalhit/1.1" http://127.0.0.1:3000/ | head -n 40
-curl -s -A "facebookexternalhit/1.1" -D - http://127.0.0.1:3000/about -o /dev/null | rg -i 'x-landing-seo-slug'
+# Direct API injection
+curl -s -A "facebookexternalhit/1.1" https://api.dater.social/ | head -n 40
+
+# Via Vercel (after middleware deploy)
+curl -s -A "facebookexternalhit/1.1" https://dater-landing.vercel.app/ | head -n 40
+curl -s -A "facebookexternalhit/1.1" -D - https://dater-landing.vercel.app/about -o /dev/null | rg -i 'x-landing-seo-slug'
 ```
 
 You should see injected meta tags in the raw HTML.
