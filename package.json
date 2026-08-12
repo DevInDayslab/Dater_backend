@@ -35,6 +35,7 @@
     "dev:grant-boost": "node src/scripts/grantBoostDev.js",
     "dev:grant-comments": "node src/scripts/grantCommentsDev.js",
     "seed:admin": "node src/scripts/seedAdminUser.js",
+    "seed:demo": "node src/scripts/seedAppleDemoUser.js",
     "start": "node src/index.js",
     "billing:reconcile-subscriptions": "node src/scripts/reconcilePlaySubscriptions.js",
     "billing:retry-fulfillment": "node src/scripts/retryBillingFulfillment.js",

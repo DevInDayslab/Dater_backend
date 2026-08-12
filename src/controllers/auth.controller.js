@@ -1,5 +1,6 @@
 const msg91Service = require("../services/msg91.service");
 const authService = require("../services/auth.service");
+const { isAppleDemoPhone, isAppleDemoOtpLogin } = require("../services/appleDemoAuth.service");
 const { debugLog, maskPhoneDigits } = require("../utils/serverDebugLog");
 
 function normalizeDigits(value) {
@@ -29,6 +30,14 @@ async function requestOTP(req, res) {
     const { phone } = req.body;
     assertValidTenDigitIndianPhone(phone);
     debugLog("auth_request_otp_start", { phone: maskPhoneDigits(phone) });
+    if (isAppleDemoPhone(phone)) {
+      debugLog("auth_request_otp_apple_demo_skip", { phone: maskPhoneDigits(phone) });
+      return res.status(200).json({
+        success: true,
+        message: "OTP sent successfully",
+        data: { type: "success", source: "APPLE_DEMO_OTP" },
+      });
+    }
     const result = await msg91Service.sendOTP(phone);
     debugLog("auth_request_otp_ok", { phone: maskPhoneDigits(phone) });
 
@@ -55,6 +64,14 @@ async function verifyOTP(req, res) {
     const { phone, otp } = req.body;
     assertValidTenDigitIndianPhone(phone);
     debugLog("auth_verify_otp_start", { phone: maskPhoneDigits(phone) });
+    if (isAppleDemoOtpLogin(phone, otp)) {
+      debugLog("auth_verify_otp_apple_demo_ok", { phone: maskPhoneDigits(phone) });
+      return res.status(200).json({
+        success: true,
+        message: "OTP validated",
+        data: { type: "success", source: "APPLE_DEMO_OTP" },
+      });
+    }
     const result = await msg91Service.verifyOTP(phone, otp);
 
     const status = String(result?.type || "").toLowerCase();
@@ -90,6 +107,14 @@ async function resendOTP(req, res) {
     const { phone } = req.body;
     assertValidTenDigitIndianPhone(phone);
     debugLog("auth_resend_otp_start", { phone: maskPhoneDigits(phone) });
+    if (isAppleDemoPhone(phone)) {
+      debugLog("auth_resend_otp_apple_demo_skip", { phone: maskPhoneDigits(phone) });
+      return res.status(200).json({
+        success: true,
+        message: "OTP resent successfully",
+        data: { type: "success", source: "APPLE_DEMO_OTP" },
+      });
+    }
     const result = await msg91Service.resendOTP(phone);
     debugLog("auth_resend_otp_ok", { phone: maskPhoneDigits(phone) });
 

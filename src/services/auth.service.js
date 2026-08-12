@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const { query, pool } = require("../config/db");
 const msg91Service = require("./msg91.service");
+const { isAppleDemoOtpLogin, isAppleDemoPhone } = require("./appleDemoAuth.service");
 const { debugLog, maskPhoneDigits } = require("../utils/serverDebugLog");
 const { resolveUserAppRoute } = require("../utils/resolveUserAppRoute");
 
@@ -436,11 +437,13 @@ async function completeLoginWithVerifiedPhoneE164({
   userAgent,
   msg91,
   audit = {},
+  skipCaptcha = false,
 }) {
   const successAction = audit.successAction || "VERIFY_ACCESS_TOKEN";
   const underageCaptchaSkipAction = audit.underageCaptchaSkipAction || successAction;
 
-  const captchaRequired = await latestPrecheckRequiresCaptcha(phoneE164);
+  const captchaRequired =
+    !skipCaptcha && !isAppleDemoPhone(phoneE164) && (await latestPrecheckRequiresCaptcha(phoneE164));
   const cid = captchaChallengeId ? String(captchaChallengeId).trim() : "";
   const cans = captchaAnswer != null ? String(captchaAnswer).trim() : "";
   const hasCaptchaPayload = Boolean(cid && cans);
@@ -663,6 +666,32 @@ async function verifyOtpAndLogin({
   deviceId,
   userAgent,
 }) {
+  if (isAppleDemoOtpLogin(phone, otp)) {
+    const phoneE164 = parseE164(phone);
+    if (!phoneE164) {
+      const error = new Error("Could not parse phone number");
+      error.code = "INVALID_PHONE_NUMBER";
+      throw error;
+    }
+    debugLog("auth_apple_demo_otp_login", { phone: maskPhoneDigits(phoneE164) });
+    return completeLoginWithVerifiedPhoneE164({
+      phoneE164,
+      consentAcceptedAt,
+      consentSource,
+      captchaChallengeId,
+      captchaAnswer,
+      ipAddress,
+      deviceId,
+      userAgent,
+      msg91: { type: "success", source: "APPLE_DEMO_OTP" },
+      skipCaptcha: true,
+      audit: {
+        successAction: "VERIFY_OTP_LOGIN",
+        underageCaptchaSkipAction: "VERIFY_OTP_LOGIN",
+      },
+    });
+  }
+
   const verifyResponse = await msg91Service.verifyOTP(phone, otp);
   const status = String(verifyResponse?.type || "").toLowerCase();
   if (status !== "success") {
