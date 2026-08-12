@@ -9,6 +9,7 @@ const revenueRoutes = require("./revenue.routes");
 const productsRoutes = require("./products.routes");
 const appConfigRoutes = require("./appConfig.routes");
 const formsRoutes = require("./forms.routes");
+const seoRoutes = require("../../modules/seo/seo.routes");
 
 const router = express.Router();
 
@@ -24,5 +25,6 @@ router.use("/revenue", revenueRoutes);
 router.use("/products", productsRoutes);
 router.use("/app-config", appConfigRoutes);
 router.use("/forms", formsRoutes);
+router.use("/seo", seoRoutes);
 
 module.exports = router;

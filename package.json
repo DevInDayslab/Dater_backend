@@ -5,6 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "migrate": "node src/scripts/migrate.js",
+    "smoke:seo": "node src/scripts/smokeSeoModule.js",
     "seed:world-cities": "node src/scripts/seedWorldCities.js",
     "migrate:city-labels": "node src/scripts/migrateStoredCityLabels.js",
     "verify:world-cities": "node src/scripts/verifyWorldCities.js",

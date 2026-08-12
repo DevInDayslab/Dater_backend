@@ -1,14 +1,23 @@
 const express = require("express");
 const landingController = require("../controllers/landing.controller");
-const { landingContactLimiter } = require("../middleware/landingContactLimiter.middleware");
+const {
+  landingContactBurstLimiter,
+  landingContactDailyLimiter,
+  landingContactPresignLimiter,
+} = require("../middleware/landingContactLimiter.middleware");
 
 const router = express.Router();
 
 router.post(
   "/contact/presign-attachment",
-  landingContactLimiter,
+  landingContactPresignLimiter,
   landingController.presignAttachment
 );
-router.post("/contact", landingContactLimiter, landingController.submitContact);
+router.post(
+  "/contact",
+  landingContactBurstLimiter,
+  landingContactDailyLimiter,
+  landingController.submitContact
+);
 
 module.exports = router;

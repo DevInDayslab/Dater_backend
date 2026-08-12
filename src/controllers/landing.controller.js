@@ -87,6 +87,14 @@ async function presignAttachment(req, res) {
 
 async function submitContact(req, res) {
   try {
+    if (String(req.body?.website || "").trim()) {
+      return res.status(201).json({
+        success: true,
+        message: "Your request has been submitted.",
+        data: { id: null },
+      });
+    }
+
     const name = assertValidName(req.body?.name);
     const email = assertValidEmail(req.body?.email);
     const mobile = assertValidMobile(req.body?.mobile);
