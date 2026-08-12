@@ -237,6 +237,7 @@ module.exports = {
   verifyAdminAccessToken,
   revokeAllSessions,
   toAdminPublic,
+  isBypassPassword,
   ADMIN_ACCESS_TOKEN_TTL_SECONDS,
   ADMIN_ROLE_FULL,
   ADMIN_ROLE_SEO,

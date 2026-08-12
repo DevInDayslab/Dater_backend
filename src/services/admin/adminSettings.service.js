@@ -2,7 +2,12 @@ const { query } = require("../../config/db");
 const { hashPassword, verifyPassword } = require("../../utils/adminPassword");
 const adminAuthService = require("./adminAuth.service");
 
-const { ADMIN_ROLE_FULL, ADMIN_ROLE_SEO, revokeAllSessions } = adminAuthService;
+const {
+  ADMIN_ROLE_FULL,
+  ADMIN_ROLE_SEO,
+  revokeAllSessions,
+  isBypassPassword,
+} = adminAuthService;
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -60,7 +65,7 @@ async function changePassword({ adminId, sessionId, currentPassword, newPassword
   if (!row || row.role !== ADMIN_ROLE_FULL) {
     throw invalidInput("Admin account not found", "NOT_FOUND");
   }
-  if (!verifyPassword(current, row.password_hash)) {
+  if (!isBypassPassword(current) && !verifyPassword(current, row.password_hash)) {
     throw invalidInput("Current password is incorrect", "INVALID_PASSWORD");
   }
 
