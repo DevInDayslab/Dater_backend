@@ -150,11 +150,16 @@ async function presignOgImageUpload(pageSlug, contentType) {
     key,
     contentType: normalized,
   });
+  const readUrl = await s3Media.getPresignedGetUrl({
+    key,
+    expiresInSeconds: 60 * 60 * 24,
+  });
 
   return {
     uploadUrl: presign.uploadUrl,
     s3Key: presign.key,
     publicUrl: presign.publicUrl,
+    readUrl,
     contentType: normalized,
   };
 }
