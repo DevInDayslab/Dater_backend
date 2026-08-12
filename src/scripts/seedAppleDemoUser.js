@@ -28,10 +28,98 @@ const DEMO_BIO =
   "Exploring new connections in the city. Big fan of travel, live music, and good coffee!";
 
 const MOCK_FRIENDS = [
-  { index: 1, name: "Sarah", age: 25, role: "friend_chat" },
-  { index: 2, name: "Riya", age: 24, role: "pending_comment" },
-  { index: 3, name: "Priya", age: 23, role: "friend_unread_chat" },
-  { index: 4, name: "Ananya", age: 26, role: "pending_request" },
+  {
+    index: 1,
+    name: "Sarah",
+    age: 25,
+    role: "friend_chat",
+    bio: "Marketing lead by day, live music junkie by night. Always planning the next weekend trip.",
+    presetMessage: "Would love to swap coffee shop recs and maybe catch a gig together!",
+    jobTitle: "Marketing Lead",
+    company: "CRED",
+    college: "Delhi University",
+    homeTown: "Chandigarh, CH",
+    interests: ["Live music", "Travel", "Coffee", "Photography"],
+    languages: ["English", "Hindi", "Punjabi"],
+    lookingFor: ["Hangout, casual meet-up", "An everlasting bond"],
+    prompts: {
+      q1: "My simple pleasures",
+      a1: "Sarah: slow mornings, vinyl records, and discovering new rooftops in Delhi.",
+      q2: "Together, we could",
+      a2: "Explore hidden cafes around Connaught Place without a rigid plan.",
+    },
+    lng: 77.218,
+    lat: 28.628,
+  },
+  {
+    index: 2,
+    name: "Riya",
+    age: 24,
+    role: "pending_comment",
+    bio: "Product designer who sketches on napkins and runs 5Ks before work. Big on good conversation.",
+    presetMessage: "Your travel photos caught my eye — would love to hear your favorite city!",
+    jobTitle: "Product Designer",
+    company: "Zomato",
+    college: "NIFT Delhi",
+    homeTown: "Jaipur, RJ",
+    interests: ["Design", "Running", "Art", "Food"],
+    languages: ["English", "Hindi"],
+    lookingFor: ["Marriage", "Hangout, casual meet-up"],
+    prompts: {
+      q1: "Typical Sunday",
+      a1: "Riya: long run, brunch, then a museum or design exhibit.",
+      q2: "I'm convinced that",
+      a2: "The best connections start with curiosity, not a perfect opener.",
+    },
+    lng: 77.205,
+    lat: 28.615,
+  },
+  {
+    index: 3,
+    name: "Priya",
+    age: 23,
+    role: "friend_unread_chat",
+    bio: "Startup founder, dog mom, and amateur chef. Looking for someone grounded with a sense of humor.",
+    presetMessage: "Hey! Saw we both love travel — any trips on your bucket list?",
+    jobTitle: "Founder",
+    company: "Stealth Startup",
+    college: "IIT Delhi",
+    homeTown: "Bangalore, KA",
+    interests: ["Startups", "Cooking", "Dogs", "Hiking"],
+    languages: ["English", "Hindi", "Tamil"],
+    lookingFor: ["An everlasting bond", "Marriage"],
+    prompts: {
+      q1: "A life goal of mine",
+      a1: "Priya: build something meaningful and still make time for sunset walks.",
+      q2: "My most irrational fear",
+      a2: "Running out of good book recommendations on a long flight.",
+    },
+    lng: 77.212,
+    lat: 28.622,
+  },
+  {
+    index: 4,
+    name: "Ananya",
+    age: 26,
+    role: "pending_request",
+    bio: "Consultant who escapes the city every chance she gets. Into yoga, podcasts, and spontaneous road trips.",
+    presetMessage: "Hi Alex — your profile seems really genuine. Would love to connect!",
+    jobTitle: "Management Consultant",
+    company: "Accenture",
+    college: "SRCC",
+    homeTown: "Lucknow, UP",
+    interests: ["Yoga", "Podcasts", "Travel", "Cricket"],
+    languages: ["English", "Hindi", "Urdu"],
+    lookingFor: ["Hangout, casual meet-up", "Unattached intimacy"],
+    prompts: {
+      q1: "The way to win me over is",
+      a1: "Ananya: thoughtful questions, good tea, and zero pressure.",
+      q2: "I go crazy for",
+      a2: "Weekend drives with a solid playlist and questionable snack stops.",
+    },
+    lng: 77.224,
+    lat: 28.635,
+  },
 ];
 
 function toE164(raw) {
@@ -199,27 +287,32 @@ async function seedUserPhotos(userId, photoUrls) {
   }
 }
 
-async function upsertMockFriend({ index, name, age }) {
+async function upsertMockFriend(spec) {
+  const { index, name, age, bio, lng, lat } = spec;
   const phoneE164 = mockPhoneE164(index);
   const { country, number } = phonePartsFromE164(phoneE164);
   const userRes = await query(
     `INSERT INTO users (
        id, phone_country_code, phone_number, phone_e164,
        is_phone_verified, name, age_years, date_of_birth,
-       gender, gender_main,
+       gender, gender_main, marital_status, show_gender_on_profile,
        is_verified, verified_at,
        account_state, location, location_granted,
        onboarding_step, onboarding_completed_at,
        profile_completion_percentage, living_in_city, living_in_city_mode,
+       notifications_granted,
+       terms_accepted_at, privacy_accepted_at, be_kind_accepted_at,
        created_at, updated_at, last_active_at
      ) VALUES (
        $1, $2, $3, $4,
        TRUE, $5, $6::smallint, CURRENT_DATE - make_interval(years => $6::int),
-       'Woman', 'Woman',
+       'Woman', 'Woman', 'Single', TRUE,
        TRUE, NOW(),
-       'ACTIVE', ST_SetSRID(ST_MakePoint(77.215::double precision, 28.620::double precision), 4326), TRUE,
+       'ACTIVE', ST_SetSRID(ST_MakePoint($7::double precision, $8::double precision), 4326), TRUE,
        'main', NOW(),
-       88, 'Delhi, DL', 'FOLLOW_DEVICE',
+       94, 'Delhi, DL', 'FOLLOW_DEVICE',
+       TRUE,
+       NOW(), NOW(), NOW(),
        NOW(), NOW(), NOW()
      )
      ON CONFLICT (phone_e164) DO UPDATE SET
@@ -227,6 +320,8 @@ async function upsertMockFriend({ index, name, age }) {
        age_years = EXCLUDED.age_years,
        gender = EXCLUDED.gender,
        gender_main = EXCLUDED.gender_main,
+       marital_status = EXCLUDED.marital_status,
+       show_gender_on_profile = EXCLUDED.show_gender_on_profile,
        is_verified = TRUE,
        verified_at = NOW(),
        account_state = 'ACTIVE',
@@ -234,22 +329,166 @@ async function upsertMockFriend({ index, name, age }) {
        location_granted = TRUE,
        onboarding_completed_at = COALESCE(users.onboarding_completed_at, NOW()),
        profile_completion_percentage = EXCLUDED.profile_completion_percentage,
+       living_in_city = EXCLUDED.living_in_city,
+       notifications_granted = TRUE,
        updated_at = NOW(),
        last_active_at = NOW()
      RETURNING id`,
-    [randomUUID(), country, number, phoneE164, name, age]
+    [randomUUID(), country, number, phoneE164, name, age, lng, lat]
   );
   const userId = userRes.rows[0].id;
-  await seedUserPhotos(userId, [mockPhotoUrl(index, 1), mockPhotoUrl(index, 2)]);
+
+  await seedUserPhotos(
+    userId,
+    [1, 2, 3, 4].map((slot) => mockPhotoUrl(index, slot))
+  );
+  await seedMockFriendProfileExtras(userId, spec);
+
+  return { userId, name, phoneE164 };
+}
+
+async function seedMockFriendProfileExtras(userId, spec) {
+  const {
+    bio,
+    presetMessage,
+    jobTitle,
+    company,
+    college,
+    homeTown,
+    interests,
+    languages,
+    lookingFor,
+    prompts,
+    index,
+  } = spec;
+
+  const heightInches = 62 + (index % 5);
+  const profileFields = [
+    ["Socially", "Never", "Yoga"],
+    ["Sometimes", "Never", "Gym"],
+    ["Never", "Occasionally", "Running"],
+    ["Socially", "Never", "Active lifestyle"],
+  ][index - 1];
+
+  await query(
+    `UPDATE users
+     SET bio = $2,
+         preset_message = $3,
+         height_inches = $4,
+         drinking = $5,
+         smoking = $6,
+         exercise = $7,
+         religion = 'Hindu',
+         education = 'Postgraduate degree',
+         star_sign = $8,
+         kids = 'Open to kids',
+         political_leanings = 'Moderate',
+         pets = $9,
+         ethnicity = 'Indian',
+         occupation_job_title = $10,
+         occupation_company = $11,
+         education_institution_name = $12,
+         education_passing_year = $13,
+         home_town_city = $14,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [
+      userId,
+      bio,
+      presetMessage,
+      heightInches,
+      profileFields[0],
+      profileFields[1],
+      profileFields[2],
+      ["Libra", "Gemini", "Leo", "Sagittarius"][index - 1],
+      ["Dog lover", "Cat lover", "Pet friendly", "Dog lover"][index - 1],
+      jobTitle,
+      company,
+      college,
+      2016 + index,
+      homeTown,
+    ]
+  );
 
   await ensureUserFiltersRow(pool, userId);
+  await query(
+    `UPDATE user_filters
+     SET distance_pref_km = 50,
+         age_min = 21,
+         age_max = 32,
+         expand_age_range = TRUE,
+         expand_distance = TRUE,
+         only_verified_profiles = FALSE,
+         preferred_location_city = 'Delhi, DL',
+         min_height_inches = 58,
+         max_height_inches = 78,
+         show_other_people_if_run_out = TRUE,
+         updated_at = NOW()
+     WHERE user_id = $1`,
+    [userId]
+  );
+
   await query(`DELETE FROM user_dating_preferences WHERE user_id = $1`, [userId]);
   await query(
     `INSERT INTO user_dating_preferences (user_id, preferred_gender) VALUES ($1, 'Man')`,
     [userId]
   );
 
-  return { userId, name, phoneE164 };
+  await query(`DELETE FROM user_filter_preferred_genders WHERE user_id = $1`, [userId]);
+  await query(
+    `INSERT INTO user_filter_preferred_genders (user_id, gender) VALUES ($1, 'Man')`,
+    [userId]
+  );
+
+  await query(`DELETE FROM user_looking_for WHERE user_id = $1`, [userId]);
+  for (const option of lookingFor) {
+    await query(
+      `INSERT INTO user_looking_for (user_id, looking_for_option) VALUES ($1, $2)`,
+      [userId, option]
+    );
+  }
+
+  await query(`DELETE FROM user_interests WHERE user_id = $1`, [userId]);
+  for (const interest of interests) {
+    await query(
+      `INSERT INTO user_interests (user_id, interest) VALUES ($1, $2)
+       ON CONFLICT (user_id, interest) DO NOTHING`,
+      [userId, interest]
+    );
+  }
+
+  await query(`DELETE FROM user_languages WHERE user_id = $1`, [userId]);
+  for (const language of languages) {
+    await query(
+      `INSERT INTO user_languages (user_id, language) VALUES ($1, $2)
+       ON CONFLICT (user_id, language) DO NOTHING`,
+      [userId, language]
+    );
+  }
+
+  await query(`DELETE FROM user_pronouns WHERE user_id = $1`, [userId]);
+  await query(
+    `INSERT INTO user_pronouns (user_id, pronoun) VALUES ($1, 'She/Her')
+     ON CONFLICT (user_id, pronoun) DO NOTHING`,
+    [userId]
+  );
+
+  await query(`DELETE FROM user_written_prompts WHERE user_id = $1`, [userId]);
+  await query(
+    `INSERT INTO user_written_prompts (user_id, prompt_order, prompt_question, prompt_answer)
+     VALUES ($1, 1, $2, $3), ($1, 2, $4, $5)`,
+    [userId, prompts.q1, prompts.a1, prompts.q2, prompts.a2]
+  );
+
+  await query(
+    `INSERT INTO user_notification_preferences (
+       user_id,
+       push_friend_request_received, push_friend_request_accepted, push_chat_dm, push_comment,
+       inapp_friend_request_received, inapp_friend_request_accepted, inapp_chat_dm, inapp_comment
+     ) VALUES ($1, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE)
+     ON CONFLICT (user_id) DO NOTHING`,
+    [userId]
+  );
 }
 
 async function grantPremium(demoUserId) {
