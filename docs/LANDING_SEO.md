@@ -3,30 +3,32 @@
 ## How it works (current setup)
 
 ```text
-Browser / crawler → dater-landing.vercel.app (Vercel)
+Browser / crawler → dater.social (Hostinger Apache)
                       │
-                      ├─ /assets/*, images, fonts  → served by Vercel
+                      ├─ /assets/*, images, fonts  → served as static files
                       │
-                      └─ /, /about, /faq, … (HTML) → middleware → api.dater.social
-                                                      Express injects SEO into index.html
+                      └─ /, /about, /faq, …        → .htaccess → index.php
+                                                      │
+                                                      ├─ bot UA  → api.dater.social (Express injects SEO)
+                                                      └─ browser   → index-spa.html (Vite SPA)
 ```
 
-- **Vercel** hosts the real site (JS/CSS/images).
-- **Express** only needs a copy of Vite’s **`index.html`** so it can inject `<title>`, `og:*`, etc. from Postgres.
+- **Hostinger** hosts the real site (JS/CSS/images).
+- **Express** only needs a copy of the Vite SPA shell so it can inject `<title>`, `og:*`, etc. from Postgres.
 - Do **not** copy the full `dist/` (images/assets) into the backend.
 
-[`DaterLanding/middleware.js`](../../DaterLanding/middleware.js) proxies document routes to the API.
+[`DaterLanding/public/index.php`](../../DaterLanding/public/index.php) proxies crawler requests to the API.
+[`DaterLanding/public/.htaccess`](../../DaterLanding/public/.htaccess) routes document paths through PHP.
 
-## Sync HTML into the backend (index.html only)
+## Sync HTML into the backend (SPA shell only)
 
 ```bash
 cd DaterLanding
-npm run build
-npm run sync:seo-html
+npm run build:deploy
 # then redeploy the backend
 ```
 
-That runs [`scripts/sync-seo-html.sh`](../../DaterLanding/scripts/sync-seo-html.sh), which places only:
+That runs [`scripts/sync-seo-html.sh`](../../DaterLanding/scripts/sync-seo-html.sh), which copies `dist/index-spa.html` to:
 
 `backend/public/landing/index.html`
 
@@ -72,14 +74,12 @@ Injection rewrites old raw S3 `og:image` URLs to this public proxy automatically
 
 Edit via **`DaterSeoAdmin`**.
 
-## Canonical URLs while testing on Vercel
+## Canonical URLs
 
-In SEO admin, set canonicals to the public Vercel host, e.g.:
+In SEO admin, set canonicals to the public site URLs, e.g.:
 
-- `https://dater-landing.vercel.app/`
-- `https://dater-landing.vercel.app/about`
-
-When you attach `dater.social`, update those canonicals to the official URLs.
+- `https://dater.social/`
+- `https://dater.social/about`
 
 ## Smoke checks
 
@@ -87,9 +87,9 @@ When you attach `dater.social`, update those canonicals to the official URLs.
 # Direct API injection
 curl -s -A "facebookexternalhit/1.1" https://api.dater.social/ | head -n 40
 
-# Via Vercel (after middleware deploy)
-curl -s -A "facebookexternalhit/1.1" https://dater-landing.vercel.app/ | head -n 40
-curl -s -A "facebookexternalhit/1.1" -D - https://dater-landing.vercel.app/about -o /dev/null | rg -i 'x-landing-seo-slug'
+# Via Hostinger (after deploy)
+curl -s -A "facebookexternalhit/1.1" https://dater.social/ | head -n 40
+curl -s -A "facebookexternalhit/1.1" https://dater.social/about | head -n 40
 ```
 
 You should see injected meta tags in the raw HTML.
