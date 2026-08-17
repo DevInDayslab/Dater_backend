@@ -133,6 +133,57 @@ async function submitContact(req, res) {
   }
 }
 
+function toPublicSeoMeta(row) {
+  return {
+    page_slug: row.page_slug,
+    meta_title: row.meta_title,
+    meta_description: row.meta_description,
+    canonical_url: row.canonical_url ?? null,
+    is_indexed: Boolean(row.is_indexed),
+  };
+}
+
+async function getSeoMeta(req, res) {
+  try {
+    const seoService = require("../modules/seo/seo.service");
+    const { pathToPageSlug, isKnownPageSlug } = require("../modules/seo/seo.pages");
+
+    const slugParam = String(req.params.slug || "").trim();
+    const pathQuery = String(req.query.path || "").trim();
+
+    let slug;
+    if (slugParam) {
+      if (!isKnownPageSlug(slugParam)) {
+        return res.status(404).json({
+          success: false,
+          message: `Unknown page_slug: ${slugParam}`,
+        });
+      }
+      slug = slugParam;
+    } else if (pathQuery) {
+      slug = pathToPageSlug(pathQuery);
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Provide :slug or ?path=/about",
+      });
+    }
+
+    const row = await seoService.getSeoBySlug(slug);
+    res.setHeader("Cache-Control", "public, max-age=300");
+    return res.status(200).json({
+      success: true,
+      data: toPublicSeoMeta(row),
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load SEO metadata",
+      error: error.message,
+    });
+  }
+}
+
 async function serveSeoMedia(req, res) {
   try {
     const s3Media = require("../services/s3Media.service");
@@ -182,5 +233,6 @@ async function serveSeoMedia(req, res) {
 module.exports = {
   presignAttachment,
   submitContact,
+  getSeoMeta,
   serveSeoMedia,
 };

@@ -8,6 +8,10 @@ const {
 
 const router = express.Router();
 
+// Public read-only SEO metadata for browser tab / client-side head updates.
+router.get("/seo-meta/:slug", landingController.getSeoMeta);
+router.get("/seo-meta", landingController.getSeoMeta);
+
 // Public OG/Twitter image proxy (private S3 → crawlable URL).
 router.get("/seo-media/*key", landingController.serveSeoMedia);
 
