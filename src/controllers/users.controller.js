@@ -385,6 +385,17 @@ async function getMe(req, res) {
     const verificationPending = Boolean(pendingSess.rows[0]?.pending);
     const filters = await loadUserFiltersSnapshot(userId);
 
+    let verificationSelfieUrl = null;
+    if (user.verification_selfie_s3_key) {
+      try {
+        verificationSelfieUrl = await s3Media.getPresignedGetUrl({
+          key: user.verification_selfie_s3_key,
+        });
+      } catch (e) {
+        debugLog("me_verification_selfie_presign_failed", { userId, error: e.message });
+      }
+    }
+
     let browseLocationCity = "";
     const brLat = user.location_latitude;
     const brLng = user.location_longitude;
@@ -444,6 +455,7 @@ async function getMe(req, res) {
           verifiedAt: user.verified_at || null,
           verificationLastAttemptAt: user.verification_last_attempt_at || null,
           hasVerificationSelfie: Boolean(user.verification_selfie_s3_key),
+          verificationSelfieUrl: verificationSelfieUrl || null,
         },
         filters,
       },
