@@ -148,6 +148,24 @@ async function deactivatePushToken(token) {
   );
 }
 
+function buildApnsAlertConfig(title, body) {
+  return {
+    headers: {
+      "apns-priority": "10",
+      "apns-push-type": "alert",
+    },
+    payload: {
+      aps: {
+        alert: {
+          title: String(title || "").trim(),
+          body: String(body || "").trim(),
+        },
+        sound: "default",
+      },
+    },
+  };
+}
+
 async function sendEventDataNotification({
   recipientUserId,
   actorUserId = "",
@@ -234,29 +252,45 @@ async function sendEventDataNotification({
     return { ok: false, reason: "no_active_tokens", canonicalType };
   }
 
-  const fcmTokens = [];
-  const skippedApnsHex = [];
+  const fcmTargets = [];
+  const skippedTokens = [];
   for (const row of rows) {
+    const tokenKind = classifyPushToken(row.token);
     if (looksLikeApnsDeviceToken(row.token)) {
-      skippedApnsHex.push(row.token);
+      skippedTokens.push({
+        platform: row.platform,
+        tokenKind,
+        reason: "apns_hex",
+        tokenPrefix: redactTokenPrefix(row.token),
+      });
       continue;
     }
-    fcmTokens.push(row.token);
+    if (tokenKind === "uuid_like") {
+      skippedTokens.push({
+        platform: row.platform,
+        tokenKind,
+        reason: "uuid_like",
+        tokenPrefix: redactTokenPrefix(row.token),
+      });
+      continue;
+    }
+    fcmTargets.push({ token: row.token, platform: row.platform, tokenKind });
   }
-  if (skippedApnsHex.length > 0) {
-    console.warn("[push] skip APNs hex device tokens (need FCM token from Firebase iOS SDK)", {
+  if (skippedTokens.length > 0) {
+    console.warn("[push] skip invalid device tokens (need FCM token from Firebase SDK)", {
       recipientUserId,
       canonicalType,
-      count: skippedApnsHex.length,
+      skipped: skippedTokens,
     });
   }
-  if (fcmTokens.length === 0) {
+  if (fcmTargets.length === 0) {
     console.warn("[push] skip: no FCM-capable tokens", {
       recipientUserId,
       canonicalType,
-      tokenKinds: rows.map((r) => classifyPushToken(r.token)),
+      tokenKinds: rows.map((r) => ({ platform: r.platform, kind: classifyPushToken(r.token) })),
+      skippedTokens,
     });
-    return { ok: false, reason: "no_fcm_capable_tokens", canonicalType };
+    return { ok: false, reason: "no_fcm_capable_tokens", canonicalType, skippedTokens };
   }
 
   const messaging = getMessaging();
@@ -280,33 +314,31 @@ async function sendEventDataNotification({
     },
   });
 
+  const fcmTokens = fcmTargets.map((t) => t.token);
   const multicast = {
     tokens: fcmTokens,
     data,
     android: {
       priority: "high",
     },
-    apns: {
-      headers: {
-        "apns-priority": "10",
-        "apns-push-type": "alert",
-      },
-      payload: {
-        aps: {
-          alert: {
-            title: String(title || "").trim(),
-            body: String(body || "").trim(),
-          },
-          sound: "default",
-        },
-      },
-    },
+    apns: buildApnsAlertConfig(title, body),
   };
 
   const result = await messaging.sendEachForMulticast(multicast);
+  const tokenResults = result.responses.map((r, i) => {
+    const target = fcmTargets[i];
+    return {
+      platform: target.platform,
+      tokenKind: target.tokenKind,
+      tokenPrefix: redactTokenPrefix(target.token),
+      ok: r.success,
+      code: r.success ? "" : String(r.error?.code || ""),
+      message: r.success ? "" : String(r.error?.message || ""),
+    };
+  });
   const failed = [];
   result.responses.forEach((r, i) => {
-    if (!r.success) failed.push({ token: fcmTokens[i], error: r.error });
+    if (!r.success) failed.push({ token: fcmTokens[i], error: r.error, target: fcmTargets[i] });
   });
   for (const f of failed) {
     const code = String(f.error?.code || "");
@@ -321,7 +353,11 @@ async function sendEventDataNotification({
     attempted: fcmTokens.length,
     successCount: result.successCount,
     failureCount: result.failureCount,
+    skippedTokens,
+    tokenResults,
     failures: failed.map((f) => ({
+      platform: f.target.platform,
+      tokenKind: f.target.tokenKind,
       tokenPrefix: redactTokenPrefix(f.token),
       code: String(f.error?.code || ""),
       message: String(f.error?.message || ""),
@@ -335,12 +371,15 @@ async function sendEventDataNotification({
       attempted: delivery.attempted,
       successCount: delivery.successCount,
       failureCount: delivery.failureCount,
+      tokenResults: delivery.tokenResults,
     });
   } else {
     console.warn("[push] delivery failed", {
       recipientUserId,
       canonicalType,
       attempted: delivery.attempted,
+      skippedTokens: delivery.skippedTokens,
+      tokenResults: delivery.tokenResults,
       failures: delivery.failures,
     });
   }
@@ -361,7 +400,8 @@ async function sendTestPushToUser(userId, { eventType = "CHAT_DM" } = {}) {
 }
 
 /**
- * Admin broadcast: data-only FCM to active tokens, bypasses per-event preference toggles.
+ * Admin broadcast to active tokens, bypasses per-event preference toggles.
+ * iOS requires aps.alert (not data-only) for tray notifications when backgrounded/killed.
  */
 async function sendAdminBroadcast({ title, body, deepLink = "", tokens }) {
   const cleanTokens = [...new Set(tokens.map((t) => String(t || "").trim()).filter(Boolean))];
@@ -392,6 +432,7 @@ async function sendAdminBroadcast({ title, body, deepLink = "", tokens }) {
       tokens: batch,
       data,
       android: { priority: "high" },
+      apns: buildApnsAlertConfig(title, body),
     });
     successCount += result.successCount;
     failureCount += result.failureCount;

@@ -2040,6 +2040,26 @@ async function registerPushToken(req, res) {
     }
     const platform = String(req.body?.platform || "ANDROID").trim().toUpperCase() || "ANDROID";
     const deviceId = String(req.body?.deviceId || "").trim();
+    const { classifyPushToken } = require("../services/pushNotification.service");
+    const tokenKind = classifyPushToken(token);
+    if (platform === "IOS" && (tokenKind === "apns_hex" || tokenKind === "uuid_like" || tokenKind === "short")) {
+      console.warn("[push] rejected invalid iOS token registration", {
+        userId,
+        tokenKind,
+        deviceId: deviceId || null,
+      });
+      return res.status(400).json({
+        success: false,
+        message:
+          "Invalid iOS push token. The app must register a Firebase FCM token, not a device UUID or raw APNs hex.",
+      });
+    }
+    if (deviceId && token === deviceId) {
+      return res.status(400).json({
+        success: false,
+        message: "Push token must be the Firebase FCM registration token, not the device id.",
+      });
+    }
 
     // Old iOS builds registered raw 64-char APNs hex tokens. Firebase Admin cannot
     // deliver to those; retire them as soon as this user registers a real FCM token.
