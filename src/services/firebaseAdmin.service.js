@@ -25,6 +25,21 @@ function initFirebaseAdmin() {
   }
 }
 
+function getPushHealth() {
+  const serviceAccountPath = String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || "").trim();
+  const firebaseServiceAccountConfigured = Boolean(serviceAccountPath);
+  let firebaseAdminReady = false;
+  if (firebaseServiceAccountConfigured) {
+    firebaseAdminReady = Boolean(getMessaging());
+  }
+  return {
+    firebaseServiceAccountConfigured,
+    firebaseAdminReady,
+    // APNs production key must be configured manually in Firebase Console (TestFlight).
+    apnsProductionKeyConfigured: null,
+  };
+}
+
 function getMessaging() {
   if (!initialized && !initFirebaseAdmin()) return null;
   return admin.messaging();
@@ -33,5 +48,6 @@ function getMessaging() {
 module.exports = {
   initFirebaseAdmin,
   getMessaging,
+  getPushHealth,
 };
 

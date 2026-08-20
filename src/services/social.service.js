@@ -544,7 +544,12 @@ async function sendFriendRequest(viewerId, targetUserId) {
       title: pushTitle,
       body: "Sent you a friend request!",
       extraData: { senderId: viewerId },
-    }).catch(() => {});
+    }).catch((error) => {
+      console.warn("[push] friend request received delivery failed", {
+        recipientUserId: targetUserId,
+        error: error?.message || error,
+      });
+    });
     return getPublicProfile(viewerId, targetUserId, { consumeView: false });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -611,7 +616,12 @@ async function sendCommentRequest(viewerId, targetUserId, rawMessage) {
       title: pushTitle,
       body: "Sent you a comment!",
       extraData: { senderId: viewerId },
-    }).catch(() => {});
+    }).catch((error) => {
+      console.warn("[push] comment delivery failed", {
+        recipientUserId: targetUserId,
+        error: error?.message || error,
+      });
+    });
     return getPublicProfile(viewerId, targetUserId, { consumeView: false });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -1148,7 +1158,12 @@ async function respondToRequest(viewerId, fromUserId, decision) {
         title: pushAcceptTitle || accepterName,
         body: "Accepted your friend request!",
         extraData: { friendId: viewerId },
-      }).catch(() => {});
+      }).catch((error) => {
+        console.warn("[push] friend request accepted delivery failed", {
+          recipientUserId: fromUserId,
+          error: error?.message || error,
+        });
+      });
     }
     return getPublicProfile(viewerId, fromUserId, { consumeView: false });
   } catch (error) {

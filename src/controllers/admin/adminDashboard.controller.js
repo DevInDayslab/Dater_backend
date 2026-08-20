@@ -88,10 +88,28 @@ async function getRevenue(req, res) {
   }
 }
 
+async function getPushHealth(req, res) {
+  try {
+    const { getPushHealth: readPushHealth } = require("../../services/firebaseAdmin.service");
+    return res.status(200).json({
+      success: true,
+      message: "Push delivery health",
+      data: readPushHealth(),
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch push health",
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   getStats,
   getGrowth,
   getBadges,
   getBreakdowns,
   getRevenue,
+  getPushHealth,
 };

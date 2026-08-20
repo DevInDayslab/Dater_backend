@@ -29,6 +29,7 @@ router.get("/:userId/content", adminUsersController.getContent);
 router.get("/:userId/chat", adminUsersController.getChatThreads);
 router.get("/:userId/chat/:threadId", adminUsersController.getChatMessages);
 router.get("/:userId/social", adminUsersController.getSocial);
+router.post("/:userId/test-push", adminUsersController.sendTestPush);
 router.get("/:userId/revenue", adminUsersController.getRevenue);
 
 module.exports = router;

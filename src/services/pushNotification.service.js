@@ -63,6 +63,28 @@ function buildDataPayload({
   return out;
 }
 
+function looksLikeApnsDeviceToken(token) {
+  return /^[0-9a-fA-F]{64}$/.test(String(token || "").trim());
+}
+
+function classifyPushToken(token) {
+  const trimmed = String(token || "").trim();
+  if (!trimmed) return "empty";
+  if (looksLikeApnsDeviceToken(trimmed)) return "apns_hex";
+  if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i.test(trimmed)) {
+    return "uuid_like";
+  }
+  if (trimmed.length < 80) return "short";
+  return "fcm";
+}
+
+function redactTokenPrefix(token) {
+  const trimmed = String(token || "").trim();
+  if (!trimmed) return "";
+  if (trimmed.length <= 12) return trimmed;
+  return `${trimmed.slice(0, 12)}…`;
+}
+
 async function resolveActorPrimaryPhotoReadUrl(row) {
   const s3Key = String(row.primary_photo_s3_key || "").trim();
   if (s3Key && !s3Key.includes("..")) {
@@ -183,7 +205,13 @@ async function sendEventDataNotification({
   };
   const flags = mapping[canonicalType] || { pushEnabled: true, inAppEnabled: true };
   if (!shouldAttemptPush(flags)) {
-    return;
+    console.warn("[push] skip: user disabled push and in-app for event", {
+      recipientUserId,
+      canonicalType,
+      pushEnabled: flags.pushEnabled,
+      inAppEnabled: flags.inAppEnabled,
+    });
+    return { ok: false, reason: "preferences_disabled", canonicalType };
   }
 
   const tokenRes = await query(
@@ -203,11 +231,9 @@ async function sendEventDataNotification({
     .filter((r) => r.token);
   if (rows.length === 0) {
     console.warn("[push] skip: no active tokens", { recipientUserId, canonicalType });
-    return;
+    return { ok: false, reason: "no_active_tokens", canonicalType };
   }
 
-  // Android registers FCM tokens. iOS currently may register raw APNs device tokens (64 hex),
-  // which FCM cannot deliver to — those must become FCM tokens via Firebase Messaging.
   const fcmTokens = [];
   const skippedApnsHex = [];
   for (const row of rows) {
@@ -225,8 +251,12 @@ async function sendEventDataNotification({
     });
   }
   if (fcmTokens.length === 0) {
-    console.warn("[push] skip: no FCM-capable tokens", { recipientUserId, canonicalType });
-    return;
+    console.warn("[push] skip: no FCM-capable tokens", {
+      recipientUserId,
+      canonicalType,
+      tokenKinds: rows.map((r) => classifyPushToken(r.token)),
+    });
+    return { ok: false, reason: "no_fcm_capable_tokens", canonicalType };
   }
 
   const messaging = getMessaging();
@@ -235,10 +265,9 @@ async function sendEventDataNotification({
       recipientUserId,
       canonicalType,
     });
-    return;
+    return { ok: false, reason: "firebase_admin_not_initialized", canonicalType };
   }
 
-  // Data payload for in-app routing + APNs alert so iOS shows a system banner when backgrounded.
   const data = buildDataPayload({
     type: canonicalType,
     title,
@@ -285,10 +314,50 @@ async function sendEventDataNotification({
       await deactivatePushToken(f.token);
     }
   }
+
+  const delivery = {
+    ok: result.successCount > 0,
+    canonicalType,
+    attempted: fcmTokens.length,
+    successCount: result.successCount,
+    failureCount: result.failureCount,
+    failures: failed.map((f) => ({
+      tokenPrefix: redactTokenPrefix(f.token),
+      code: String(f.error?.code || ""),
+      message: String(f.error?.message || ""),
+    })),
+  };
+
+  if (delivery.ok) {
+    console.log("[push] delivered", {
+      recipientUserId,
+      canonicalType,
+      attempted: delivery.attempted,
+      successCount: delivery.successCount,
+      failureCount: delivery.failureCount,
+    });
+  } else {
+    console.warn("[push] delivery failed", {
+      recipientUserId,
+      canonicalType,
+      attempted: delivery.attempted,
+      failures: delivery.failures,
+    });
+  }
+
+  return delivery;
 }
 
-function looksLikeApnsDeviceToken(token) {
-  return /^[0-9a-fA-F]{64}$/.test(String(token || "").trim());
+async function sendTestPushToUser(userId, { eventType = "CHAT_DM" } = {}) {
+  const canonicalType = canonicalPushEventType(eventType);
+  return sendEventDataNotification({
+    recipientUserId: userId,
+    actorUserId: "",
+    eventType: canonicalType,
+    title: "Dater test",
+    body: "Push delivery test from admin",
+    extraData: { testPush: "true" },
+  });
 }
 
 /**
@@ -345,5 +414,8 @@ async function sendAdminBroadcast({ title, body, deepLink = "", tokens }) {
 module.exports = {
   sendEventDataNotification,
   sendAdminBroadcast,
+  sendTestPushToUser,
+  classifyPushToken,
+  redactTokenPrefix,
+  canonicalPushEventType,
 };
-

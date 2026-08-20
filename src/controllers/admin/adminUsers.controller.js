@@ -237,6 +237,27 @@ async function getRevenue(req, res) {
   }
 }
 
+async function sendTestPush(req, res) {
+  try {
+    const userId = req.params.userId;
+    const exists = await adminUsersService.getUserRow(userId, { includeDeleted: true });
+    if (!exists) return notFound(res);
+    const eventType = String(req.body?.eventType || "CHAT_DM").trim();
+    const result = await adminUsersService.sendTestPush(userId, { eventType });
+    return res.status(200).json({
+      success: true,
+      message: result.ok ? "Test push sent" : "Test push not delivered",
+      data: result,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to send test push",
+      error: error.message,
+    });
+  }
+}
+
 async function fileReport(req, res) {
   try {
     const result = await adminUserMutations.fileReport(req.params.userId, {
@@ -453,6 +474,7 @@ module.exports = {
   getChatMessages,
   getSocial,
   getRevenue,
+  sendTestPush,
   fileReport,
   issueWarning,
   banUser,

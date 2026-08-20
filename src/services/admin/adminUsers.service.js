@@ -3,6 +3,7 @@ const { presignMediaUrl } = require("./adminPresign.service");
 const { withAdminReportDisplay } = require("../../utils/adminReportDisplay");
 const { loadUserFiltersDetail } = require("./filtersSnapshot.service");
 const { csvRow, formatAccountStateLabel } = require("../../utils/csvExport");
+const { redactTokenPrefix, classifyPushToken, sendTestPushToUser } = require("../pushNotification.service");
 
 const FREE_TIER_DAILY_PROFILE_VIEWS = 20;
 const USERS_EXPORT_MAX_ROWS = 10000;
@@ -729,7 +730,7 @@ async function getUserSocial(userId) {
       [userId]
     ),
     query(
-      `SELECT id, platform, device_id, is_active, last_seen_at
+      `SELECT id, platform, device_id, token, is_active, last_seen_at
        FROM user_push_tokens
        WHERE user_id = $1
        ORDER BY last_seen_at DESC`,
@@ -783,6 +784,9 @@ async function getUserSocial(userId) {
       id: r.id,
       platform: r.platform,
       deviceId: r.device_id || null,
+      tokenPrefix: redactTokenPrefix(r.token),
+      tokenLength: String(r.token || "").trim().length,
+      tokenKind: classifyPushToken(r.token),
       isActive: Boolean(r.is_active),
       lastSeenAt: toIso(r.last_seen_at),
     })),
@@ -907,6 +911,10 @@ async function getUserRevenue(userId) {
   };
 }
 
+async function sendTestPush(userId, { eventType = "CHAT_DM" } = {}) {
+  return sendTestPushToUser(userId, { eventType });
+}
+
 module.exports = {
   listUsers,
   exportUsersCsv,
@@ -921,4 +929,5 @@ module.exports = {
   getUserSocial,
   getUserRevenue,
   getUserRow,
+  sendTestPush,
 };

@@ -661,7 +661,13 @@ async function sendMessage(viewerId, threadId, text, replyToMessageId = "") {
           body: body,
           chatId: threadId,
           extraData: { senderId: viewerId },
-        }).catch(() => {});
+        }).catch((error) => {
+          console.warn("[push] chat DM delivery failed", {
+            recipientUserId: peerUserId,
+            threadId,
+            error: error?.message || error,
+          });
+        });
       })();
     }
     return {
