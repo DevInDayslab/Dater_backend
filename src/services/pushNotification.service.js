@@ -149,23 +149,22 @@ async function deactivatePushToken(token) {
 }
 
 function buildApnsAlertConfig(title, body, badgeCount) {
-  const aps = {
-    alert: {
-      title: String(title || "").trim(),
-      body: String(body || "").trim(),
-    },
-    sound: "default",
-  };
-  if (badgeCount !== undefined && badgeCount !== null) {
-    aps.badge = Math.max(0, Number(badgeCount) || 0);
-  }
+  // APNs ignores non-integer badges; always emit a truncated non-negative int.
+  const badge = Math.max(0, Math.trunc(Number(badgeCount) || 0));
   return {
     headers: {
       "apns-priority": "10",
       "apns-push-type": "alert",
     },
     payload: {
-      aps,
+      aps: {
+        alert: {
+          title: String(title || "").trim(),
+          body: String(body || "").trim(),
+        },
+        sound: "default",
+        badge,
+      },
     },
   };
 }
@@ -320,14 +319,13 @@ async function sendEventDataNotification({
 
   let badgeTotal = 0;
   try {
-    // Lazy require avoids a circular load:
+    // Lazy require avoids circular load:
     // pushNotification → unreadCounts → social/chat → pushNotification
-    // which left sendEventDataNotification undefined and broke comment/friend sends.
     const unreadCountsService = require("./unreadCounts.service");
     const counts = await unreadCountsService.getUnreadCounts(recipientUserId);
     badgeTotal =
-      Math.max(0, Number(counts.unreadChats) || 0) +
-      Math.max(0, Number(counts.unreadNotifications) || 0);
+      Math.max(0, Math.trunc(Number(counts.unreadChats) || 0)) +
+      Math.max(0, Math.trunc(Number(counts.unreadNotifications) || 0));
   } catch (err) {
     console.warn("[push] unread counts for badge failed", {
       recipientUserId,
@@ -336,6 +334,8 @@ async function sendEventDataNotification({
   }
 
   const fcmTokens = fcmTargets.map((t) => t.token);
+  // FCM Admin: data + apns.payload.aps (alert/sound/badge). Keep data-driven for Android
+  // parity; iOS killed-state badge comes from aps.badge.
   const multicast = {
     tokens: fcmTokens,
     data,
