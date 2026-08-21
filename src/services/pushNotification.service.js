@@ -2,7 +2,6 @@ const { query } = require("../config/db");
 const { getMessaging } = require("./firebaseAdmin.service");
 const s3Media = require("./s3Media.service");
 const { displayNameForPrivacy } = require("../utils/displayName");
-const unreadCountsService = require("./unreadCounts.service");
 
 // Backend must not guess app foreground/background using timestamps.
 // Send data payload if user wants either channel; client decides final route.
@@ -321,6 +320,10 @@ async function sendEventDataNotification({
 
   let badgeTotal = 0;
   try {
+    // Lazy require avoids a circular load:
+    // pushNotification → unreadCounts → social/chat → pushNotification
+    // which left sendEventDataNotification undefined and broke comment/friend sends.
+    const unreadCountsService = require("./unreadCounts.service");
     const counts = await unreadCountsService.getUnreadCounts(recipientUserId);
     badgeTotal =
       Math.max(0, Number(counts.unreadChats) || 0) +

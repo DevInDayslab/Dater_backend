@@ -537,14 +537,16 @@ async function sendFriendRequest(viewerId, targetUserId) {
     const sRow = senderRes.rows[0];
     const pushTitle = formatNotificationPersonTitle(sRow?.name, sRow?.hide_my_name === true, sRow?.age_years);
     await client.query("COMMIT");
-    sendEventDataNotification({
-      recipientUserId: targetUserId,
-      actorUserId: viewerId,
-      eventType: "FRIEND_REQUEST_RECEIVED",
-      title: pushTitle,
-      body: "Sent you a friend request!",
-      extraData: { senderId: viewerId },
-    }).catch((error) => {
+    Promise.resolve(
+      sendEventDataNotification({
+        recipientUserId: targetUserId,
+        actorUserId: viewerId,
+        eventType: "FRIEND_REQUEST_RECEIVED",
+        title: pushTitle,
+        body: "Sent you a friend request!",
+        extraData: { senderId: viewerId },
+      })
+    ).catch((error) => {
       console.warn("[push] friend request received delivery failed", {
         recipientUserId: targetUserId,
         error: error?.message || error,
@@ -609,14 +611,16 @@ async function sendCommentRequest(viewerId, targetUserId, rawMessage) {
     const sRow = senderRes.rows[0];
     const pushTitle = formatNotificationPersonTitle(sRow?.name, sRow?.hide_my_name === true, sRow?.age_years);
     await client.query("COMMIT");
-    sendEventDataNotification({
-      recipientUserId: targetUserId,
-      actorUserId: viewerId,
-      eventType: "COMMENT",
-      title: pushTitle,
-      body: "Sent you a comment!",
-      extraData: { senderId: viewerId },
-    }).catch((error) => {
+    Promise.resolve(
+      sendEventDataNotification({
+        recipientUserId: targetUserId,
+        actorUserId: viewerId,
+        eventType: "COMMENT",
+        title: pushTitle,
+        body: "Sent you a comment!",
+        extraData: { senderId: viewerId },
+      })
+    ).catch((error) => {
       console.warn("[push] comment delivery failed", {
         recipientUserId: targetUserId,
         error: error?.message || error,
