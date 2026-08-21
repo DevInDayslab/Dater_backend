@@ -1,8 +1,8 @@
 const { DetectFacesCommand } = require("@aws-sdk/client-rekognition");
 
-const MIN_FACE_CONFIDENCE = 85;
+const MIN_FACE_CONFIDENCE = 80;
 /** Primary face bounding box must cover at least this fraction of the image (width*height). */
-const MIN_PRIMARY_FACE_AREA_FRACTION = 0.02;
+const MIN_PRIMARY_FACE_AREA_FRACTION = 0.015;
 
 function faceBoundingBoxArea(face) {
   const bb = face?.BoundingBox;
