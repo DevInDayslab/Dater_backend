@@ -2,6 +2,7 @@ const { query } = require("../config/db");
 const { getMessaging } = require("./firebaseAdmin.service");
 const s3Media = require("./s3Media.service");
 const { displayNameForPrivacy } = require("../utils/displayName");
+const unreadCountsService = require("./unreadCounts.service");
 
 // Backend must not guess app foreground/background using timestamps.
 // Send data payload if user wants either channel; client decides final route.
@@ -148,20 +149,24 @@ async function deactivatePushToken(token) {
   );
 }
 
-function buildApnsAlertConfig(title, body) {
+function buildApnsAlertConfig(title, body, badgeCount) {
+  const aps = {
+    alert: {
+      title: String(title || "").trim(),
+      body: String(body || "").trim(),
+    },
+    sound: "default",
+  };
+  if (badgeCount !== undefined && badgeCount !== null) {
+    aps.badge = Math.max(0, Number(badgeCount) || 0);
+  }
   return {
     headers: {
       "apns-priority": "10",
       "apns-push-type": "alert",
     },
     payload: {
-      aps: {
-        alert: {
-          title: String(title || "").trim(),
-          body: String(body || "").trim(),
-        },
-        sound: "default",
-      },
+      aps,
     },
   };
 }
@@ -314,6 +319,19 @@ async function sendEventDataNotification({
     },
   });
 
+  let badgeTotal = 0;
+  try {
+    const counts = await unreadCountsService.getUnreadCounts(recipientUserId);
+    badgeTotal =
+      Math.max(0, Number(counts.unreadChats) || 0) +
+      Math.max(0, Number(counts.unreadNotifications) || 0);
+  } catch (err) {
+    console.warn("[push] unread counts for badge failed", {
+      recipientUserId,
+      message: String(err?.message || err),
+    });
+  }
+
   const fcmTokens = fcmTargets.map((t) => t.token);
   const multicast = {
     tokens: fcmTokens,
@@ -321,7 +339,7 @@ async function sendEventDataNotification({
     android: {
       priority: "high",
     },
-    apns: buildApnsAlertConfig(title, body),
+    apns: buildApnsAlertConfig(title, body, badgeTotal),
   };
 
   const result = await messaging.sendEachForMulticast(multicast);
